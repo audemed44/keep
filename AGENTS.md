@@ -5,13 +5,26 @@ imports this file.
 
 ## Project
 
-Homelab backup orchestrator: consistent database dumps, Kopia snapshots, Lookout heartbeats. A Go server (`cmd/keep`, `internal/`)
+Homelab backup orchestrator: it makes each source consistent (SQLite
+copies with VACUUM INTO, Postgres/MariaDB dumps, or stopping containers),
+has the backup engine (Kopia, via `docker exec`) snapshot it, records the
+run and pings a Lookout heartbeat. A Go server (`cmd/keep`, `internal/`)
 serves a JSON API and the Preact + TypeScript frontend (`frontend/`), built
 into `web/dist` and embedded in the binary. State lives in SQLite at
-`/data/keep.db` (`internal/store`).
+`$KEEP_DATA_DIR/keep.db` (`internal/store`); what to back up is in
+`keep.yml`.
 
+- `internal/config`: keep.yml, folder discovery in roots, exclude patterns.
+- `internal/runner`: the schedule, one run at a time, per-source
+  prepare → snapshot → record, the path check between Keep's and the
+  engine's mounts, the overview (source states).
+- `internal/prepare`: SQLite discovery and copies, database dumps.
+- `internal/engine`: the `Engine` interface and Kopia. Nothing outside this
+  package knows how Kopia is called (restic comes later).
+- `internal/docker`: exec, stop, start and inspect over the socket.
 - `internal/server`: routes (`server.go`), token sign-in and the
-  same-origin guard (`auth.go`), the Foyer card (`foyer.go`).
+  same-origin guard (`auth.go`), the Foyer card and `/api/foyer/backups`
+  (`foyer.go`).
 - `internal/store`: schema, migrations (append-only, tracked in
   `PRAGMA user_version`) and queries.
 - `frontend/src`: `App.tsx` (session, shell, nav), `router.ts` (path
@@ -23,7 +36,18 @@ into `web/dist` and embedded in the binary. State lives in SQLite at
 - **Low memory is a feature.** One static binary, `GOMEMLIMIT=32MiB`,
   `mem_limit: 64m` in compose. Keep history in SQLite, not in memory.
 - Direct dependencies: modernc.org/sqlite (pure Go, so the build stays
-  static and cgo-free). Justify any new one, Go or npm.
+  static and cgo-free) and gopkg.in/yaml.v3 (keep.yml is hand-edited, with
+  comments). Justify any new one, Go or npm.
+- **Keep never does chunking, encryption or storage itself**, and never
+  writes to an app's files: only to its own folder and staging. Engine
+  output is read from the CLI's `--json`, not Kopia's undocumented API.
+- Keep and the engine see every path the same way (same mount paths); the
+  runner checks it. Kopia applies a parent folder's ignore rules to
+  snapshots inside it unless the path has its own list, so `Configure`
+  always sets one.
+- Tests never touch a real repository: use the fake engine/docker in
+  `runner_test.go`, or a throwaway `kopia/kopia` container with a
+  filesystem repository.
 - Every `/api/` call needs `KEEP_TOKEN` (bearer, or the session cookie
   derived from it), and state-changing browser requests from another origin
   are refused (`sameOrigin`). Never log or return secrets.

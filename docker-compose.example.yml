@@ -1,18 +1,39 @@
 # Keep: Homelab backup orchestrator: consistent database dumps, Kopia snapshots, Lookout heartbeats.
+#
+# Keep tells the engine "snapshot /data/ledger", and the engine reads its
+# own /data/ledger: mount every folder at the same path in both, staging
+# included. Here Keep keeps its own data (and staging) in /data/keep,
+# inside the stack folder Kopia already sees as /data.
 services:
   keep:
     image: ghcr.io/audemed44/keep:latest
     container_name: keep
     restart: unless-stopped
     user: "1000:1000"
+    # The docker group's id on the host (getent group docker), for the socket.
+    group_add: ["988"]
     environment:
       # openssl rand -hex 32; what you sign in with, and Foyer's widget key.
       - KEEP_TOKEN=${KEEP_TOKEN}
+      - KEEP_DATA_DIR=/data/keep # keep.db, keep.yml and staging
+      # Optional: a Lookout (or healthchecks.io) heartbeat's ping URL.
+      - KEEP_HEARTBEAT_URL=${KEEP_HEARTBEAT_URL}
       - TZ=Asia/Kolkata
       # Optional: Foyer's address, linked from the header.
       # - HOMEPAGE_URL=https://home.example.com
     volumes:
-      - ./keep:/data
+      # Read-write: SQLite needs to touch a WAL database's -shm file even to
+      # read it. Keep only ever writes to its own folder.
+      - ./:/data
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8091:8080"
     mem_limit: 64m
+
+  kopia:
+    image: kopia/kopia:0.23.1
+    # A fixed hostname keeps the snapshots' source names stable.
+    hostname: kopia
+    volumes:
+      - ./:/data:ro
+      # … its config, cache and repository
