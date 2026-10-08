@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-// Skeleton serves a card in the Foyer widget format
+// Keep serves a card in the Foyer widget format
 // (https://github.com/audemed44/foyer/blob/main/docs/app-widgets.md).
 // Foyer finds it at /api/foyer/widget by itself and calls it with the
 // token as a bearer token. Items can also carry an action button, and

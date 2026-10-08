@@ -20,7 +20,7 @@ export function App() {
       .catch((e: Error) => setError(e.message));
   }, []);
 
-  if (error) return <div class="boot">Can't reach Skeleton: {error}</div>;
+  if (error) return <div class="boot">Can't reach Keep: {error}</div>;
   if (!session) return <div class="boot" />;
   if (!session.authenticated) return <Login onDone={setSession} />;
   return (
@@ -54,7 +54,7 @@ function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }
         )}
         <a class="brand" href="/">
           <span class="brand-mark" aria-hidden="true" />
-          Skeleton
+          Keep
         </a>
         <span class="spacer" />
         <nav class="topnav" aria-label="Pages">

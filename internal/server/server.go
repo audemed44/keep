@@ -1,4 +1,4 @@
-// Package server exposes Skeleton's JSON API and the built frontend.
+// Package server exposes Keep's JSON API and the built frontend.
 package server
 
 import (
@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/audemed44/skeleton/internal/store"
+	"github.com/audemed44/keep/internal/store"
 )
 
 type Options struct {

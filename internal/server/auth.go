@@ -14,13 +14,13 @@ import (
 // Every /api/ call needs the token: as a bearer token (Foyer, scripts) or
 // as the session cookie a browser gets by entering it once.
 
-const cookieName = "skeleton_session"
+const cookieName = "keep_session"
 
 // sessionValue derives the cookie from the token, so changing the token
 // signs every browser out and the cookie never holds the token itself.
 func sessionValue(token string) string {
 	mac := hmac.New(sha256.New, []byte(token))
-	mac.Write([]byte("skeleton-session-v1"))
+	mac.Write([]byte("keep-session-v1"))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -41,7 +41,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.authenticated(r) {
-			writeError(w, http.StatusUnauthorized, "sign in with the Skeleton token")
+			writeError(w, http.StatusUnauthorized, "sign in with the Keep token")
 			return
 		}
 		next.ServeHTTP(w, r)

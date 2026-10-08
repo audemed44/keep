@@ -23,10 +23,10 @@ export function Login(props: { onDone: (s: Session) => void }) {
   return (
     <div class="login">
       <form class="login-card" onSubmit={submit}>
-        <div class="eyebrow eyebrow-accent">Skeleton</div>
+        <div class="eyebrow eyebrow-accent">Keep</div>
         <h1 class="login-title">Sign in</h1>
         <p class="muted">
-          Enter the token from <code>SKELETON_TOKEN</code>. This browser stays signed in until the
+          Enter the token from <code>KEEP_TOKEN</code>. This browser stays signed in until the
           token changes.
         </p>
         <input

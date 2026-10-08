@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/audemed44/skeleton/internal/store"
+	"github.com/audemed44/keep/internal/store"
 )
 
 // Items are the template's example resource: a list, a save that both

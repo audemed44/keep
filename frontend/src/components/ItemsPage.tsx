@@ -24,7 +24,7 @@ export function ItemsPage() {
   return (
     <div class="page">
       <header class="page-head">
-        <div class="eyebrow eyebrow-accent">Skeleton</div>
+        <div class="eyebrow eyebrow-accent">Keep</div>
         <h1 class="page-title">Items</h1>
         <div class="figures stagger">
           <Figure value={items ? open.length : "—"} label="Open" tone="accent" />

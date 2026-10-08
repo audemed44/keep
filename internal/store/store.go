@@ -1,4 +1,4 @@
-// Package store keeps Skeleton's state in SQLite.
+// Package store keeps Keep's state in SQLite.
 //
 // The schema is created with CREATE ... IF NOT EXISTS; later changes go in
 // migrations, which run once each in order and are recorded in

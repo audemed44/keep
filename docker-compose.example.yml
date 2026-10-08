@@ -1,18 +1,18 @@
-# Skeleton: TODO one line on what it does.
+# Keep: Homelab backup orchestrator: consistent database dumps, Kopia snapshots, Lookout heartbeats.
 services:
-  skeleton:
-    image: ghcr.io/audemed44/skeleton:latest
-    container_name: skeleton
+  keep:
+    image: ghcr.io/audemed44/keep:latest
+    container_name: keep
     restart: unless-stopped
     user: "1000:1000"
     environment:
       # openssl rand -hex 32; what you sign in with, and Foyer's widget key.
-      - SKELETON_TOKEN=${SKELETON_TOKEN}
+      - KEEP_TOKEN=${KEEP_TOKEN}
       - TZ=Asia/Kolkata
       # Optional: Foyer's address, linked from the header.
       # - HOMEPAGE_URL=https://home.example.com
     volumes:
-      - ./skeleton:/data
+      - ./keep:/data
     ports:
-      - "8089:8080"
+      - "8091:8080"
     mem_limit: 64m

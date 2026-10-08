@@ -9,7 +9,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/audemed44/skeleton/internal/store"
+	"github.com/audemed44/keep/internal/store"
 )
 
 const token = "test-token"

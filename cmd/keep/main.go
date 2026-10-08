@@ -1,4 +1,4 @@
-// Command skeleton serves Skeleton's API and frontend from one small binary.
+// Command keep serves Keep's API and frontend from one small binary.
 package main
 
 import (
@@ -15,9 +15,9 @@ import (
 	"time"
 	_ "time/tzdata" // the runtime image may have no zoneinfo; TZ needs this
 
-	"github.com/audemed44/skeleton/internal/server"
-	"github.com/audemed44/skeleton/internal/store"
-	"github.com/audemed44/skeleton/web"
+	"github.com/audemed44/keep/internal/server"
+	"github.com/audemed44/keep/internal/store"
+	"github.com/audemed44/keep/web"
 )
 
 func env(key, fallback string) string {
@@ -32,22 +32,22 @@ func main() {
 		os.Exit(healthcheck())
 	}
 	level := slog.LevelInfo
-	if os.Getenv("SKELETON_DEBUG") != "" {
+	if os.Getenv("KEEP_DEBUG") != "" {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	token := os.Getenv("SKELETON_TOKEN")
+	token := os.Getenv("KEEP_TOKEN")
 	if token == "" {
-		slog.Error("set SKELETON_TOKEN: it's what you sign in with, and what Foyer uses for the widget")
+		slog.Error("set KEEP_TOKEN: it's what you sign in with, and what Foyer uses for the widget")
 		os.Exit(1)
 	}
-	dataDir := env("SKELETON_DATA_DIR", "/data")
+	dataDir := env("KEEP_DATA_DIR", "/data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		slog.Error("could not create the data folder", "err", err)
 		os.Exit(1)
 	}
-	db, err := store.Open(filepath.Join(dataDir, "skeleton.db"))
+	db, err := store.Open(filepath.Join(dataDir, "keep.db"))
 	if err != nil {
 		slog.Error("could not open the database", "err", err)
 		os.Exit(1)
@@ -64,7 +64,7 @@ func main() {
 	app := server.New(server.Options{Store: db, Token: token, FoyerURL: foyerURL(), Web: dist})
 
 	srv := &http.Server{
-		Addr:              ":" + env("SKELETON_PORT", "8080"),
+		Addr:              ":" + env("KEEP_PORT", "8080"),
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -74,7 +74,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	slog.Info("skeleton listening", "addr", srv.Addr)
+	slog.Info("keep listening", "addr", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
@@ -84,7 +84,7 @@ func main() {
 // healthcheck is the image's HEALTHCHECK: the runtime image has no curl.
 func healthcheck() int {
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + env("SKELETON_PORT", "8080") + "/healthz")
+	resp, err := client.Get("http://127.0.0.1:" + env("KEEP_PORT", "8080") + "/healthz")
 	if err != nil {
 		return 1
 	}
