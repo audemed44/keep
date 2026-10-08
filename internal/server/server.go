@@ -11,11 +11,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/audemed44/keep/internal/runner"
 	"github.com/audemed44/keep/internal/store"
 )
 
 type Options struct {
 	Store    *store.Store
+	Runner   *runner.Runner
 	Token    string
 	Web      fs.FS
 	FoyerURL string // Foyer, the homelab's start page, linked from the header
@@ -32,12 +34,18 @@ func New(o Options) *Server {
 
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
-	api.HandleFunc("GET /api/items", s.listItems)
-	api.HandleFunc("POST /api/items", s.saveItem)
-	api.HandleFunc("PUT /api/items/{id}", s.saveItem)
-	api.HandleFunc("DELETE /api/items/{id}", s.deleteItem)
+	api.HandleFunc("GET /api/overview", s.getOverview)
+	api.HandleFunc("GET /api/config", s.getConfig)
+	api.HandleFunc("GET /api/runs", s.listRuns)
+	api.HandleFunc("POST /api/runs", s.startRun)
+	api.HandleFunc("GET /api/runs/{id}", s.getRun)
+	api.HandleFunc("GET /api/runs/{id}/log", s.runLog)
+	api.HandleFunc("GET /api/sources/{name}/history", s.sourceHistory)
 
 	api.HandleFunc("GET /api/foyer/widget", s.foyerWidget)
+	api.HandleFunc("POST /api/foyer/run", s.foyerRun)
+	api.HandleFunc("GET /api/foyer/runs/{id}", s.foyerRunStatus)
+	api.HandleFunc("GET /api/foyer/backups", s.foyerBackups)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/session", s.getSession)
