@@ -2,20 +2,34 @@ import { useEffect, useState } from "preact/hooks";
 
 /**
  * Path routes (the server answers every non-API path with the app):
- *   /                    items
- *   /about               what the app is and how it's set up
+ *   /                    sources and the last run
+ *   /runs                every run
+ *   /runs/:id            one run: its sources and log
+ *   /sources/:name       one source: size over time, recent runs
+ *   /config              keep.yml, as it is on disk
  */
-export type Route = { page: "home" } | { page: "about" };
+export type Route =
+  | { page: "home" }
+  | { page: "runs" }
+  | { page: "run"; id: number }
+  | { page: "source"; name: string }
+  | { page: "config" };
 
 export function parseRoute(path: string): Route {
-  const parts = path.split("/").filter(Boolean);
+  const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   switch (parts[0]) {
-    case "about":
-      return { page: parts[0] };
+    case "runs": {
+      const id = Number(parts[1]);
+      return parts[1] && Number.isInteger(id) && id > 0 ? { page: "run", id } : { page: "runs" };
+    }
+    case "sources":
+      if (parts[1]) return { page: "source", name: parts[1] };
+      break;
+    case "config":
+      return { page: "config" };
   }
   return { page: "home" };
 }
-
 const listeners = new Set<() => void>();
 
 export function navigate(url: string, replace = false) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, plural } from "./lib";
+import { ago, bytes, plural, took, until } from "./lib";
 import { parseRoute } from "./router";
 
 describe("format", () => {
@@ -8,6 +8,17 @@ describe("format", () => {
     expect(ago("2026-10-02T11:59:30Z", now)).toBe("just now");
     expect(ago("2026-10-02T09:00:00Z", now)).toBe("3h ago");
     expect(ago("2026-09-28T12:00:00Z", now)).toBe("4d ago");
+  });
+  it("bytes", () => {
+    expect(bytes(999)).toBe("999 B");
+    expect(bytes(1500)).toBe("1.5 kB");
+    expect(bytes(3_200_000_000)).toBe("3.2 GB");
+  });
+  it("until and took", () => {
+    expect(until("2026-10-02T15:00:00Z", now)).toBe("in 3h");
+    expect(until("2026-10-02T12:00:30Z", now)).toBe("any moment");
+    expect(took("2026-10-02T12:00:00Z", "2026-10-02T12:04:12Z")).toBe("4m 12s");
+    expect(took("2026-10-02T12:00:00Z", "2026-10-02T14:30:00Z")).toBe("2h 30m");
   });
   it("plural", () => {
     expect(plural(1, "item")).toBe("1 item");
@@ -18,7 +29,11 @@ describe("format", () => {
 describe("router", () => {
   it("parses routes", () => {
     expect(parseRoute("/")).toEqual({ page: "home" });
-    expect(parseRoute("/about")).toEqual({ page: "about" });
+    expect(parseRoute("/runs")).toEqual({ page: "runs" });
+    expect(parseRoute("/runs/12")).toEqual({ page: "run", id: 12 });
+    expect(parseRoute("/runs/x")).toEqual({ page: "runs" });
+    expect(parseRoute("/sources/my%20app")).toEqual({ page: "source", name: "my app" });
+    expect(parseRoute("/config")).toEqual({ page: "config" });
     expect(parseRoute("/nope")).toEqual({ page: "home" });
   });
 });
