@@ -15,6 +15,9 @@ import (
 	"time"
 	_ "time/tzdata" // the runtime image may have no zoneinfo; TZ needs this
 
+	"github.com/audemed44/keep/internal/config"
+	"github.com/audemed44/keep/internal/docker"
+	"github.com/audemed44/keep/internal/runner"
 	"github.com/audemed44/keep/internal/server"
 	"github.com/audemed44/keep/internal/store"
 	"github.com/audemed44/keep/web"
@@ -61,7 +64,31 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	app := server.New(server.Options{Store: db, Token: token, FoyerURL: foyerURL(), Web: dist})
+	configFile := env("KEEP_CONFIG", filepath.Join(dataDir, "keep.yml"))
+	if _, err := os.Stat(configFile); errors.Is(err, fs.ErrNotExist) {
+		if err := os.WriteFile(configFile, []byte(config.Example), 0o644); err != nil {
+			slog.Error("could not write a starter keep.yml", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("wrote a starter config; edit it to choose what to back up", "file", configFile)
+	}
+	if _, err := config.Load(configFile); err != nil {
+		slog.Warn("keep.yml has a problem; runs fail until it's fixed", "file", configFile, "err", err)
+	}
+	self := os.Getenv("KEEP_CONTAINER")
+	if self == "" {
+		self, _ = os.Hostname() // Docker sets it to the container id
+	}
+	run := runner.New(runner.Options{
+		Store:      db,
+		Docker:     docker.New(env("KEEP_DOCKER_SOCKET", "/var/run/docker.sock")),
+		ConfigFile: configFile,
+		Heartbeat:  os.Getenv("KEEP_HEARTBEAT_URL"),
+		Self:       self,
+	})
+	go run.Loop(ctx)
+
+	app := server.New(server.Options{Store: db, Runner: run, Token: token, FoyerURL: foyerURL(), Web: dist})
 
 	srv := &http.Server{
 		Addr:              ":" + env("KEEP_PORT", "8080"),

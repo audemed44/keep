@@ -1,0 +1,121 @@
+package runner
+
+import (
+	"context"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/audemed44/keep/internal/config"
+	"github.com/audemed44/keep/internal/store"
+)
+
+// Source states, the same set Foyer uses for backups.
+const (
+	StateOK      = "ok"
+	StateRunning = "running"
+	StateStale   = "stale"  // the last good backup is older than stale_after
+	StateErrors  = "errors" // the latest attempt failed or warned
+	StateNever   = "never"
+)
+
+type SourceStatus struct {
+	config.Source
+	// HostPath is Path on the host (through Keep's mounts).
+	HostPath string `json:"host_path,omitempty"`
+	// Partial is true when the source leaves part of its folder out (its
+	// own excludes).
+	Partial bool             `json:"partial"`
+	State   string           `json:"state"`
+	Latest  *store.RunSource `json:"latest,omitempty"`
+	Success *store.RunSource `json:"success,omitempty"`
+}
+
+type Overview struct {
+	Engine  string         `json:"engine"`
+	Every   string         `json:"every"`
+	Stale   string         `json:"stale_after"`
+	Sources []SourceStatus `json:"sources"`
+	State
+	LastRun *store.Run `json:"last_run,omitempty"`
+	Repo    *RepoInfo  `json:"repo,omitempty"`
+	// ConfigError is set when keep.yml can't be read or resolved.
+	ConfigError string `json:"config_error,omitempty"`
+	ConfigFile  string `json:"config_file"`
+}
+
+// Overview is every source with its state, plus the schedule and the
+// last run.
+func (r *Runner) Overview(ctx context.Context) (Overview, error) {
+	out := Overview{Sources: []SourceStatus{}, State: r.State(), ConfigFile: r.ConfigFile}
+	if last, ok, err := r.Store.LastRun(ctx); err != nil {
+		return out, err
+	} else if ok {
+		out.LastRun = &last
+	}
+	var repo RepoInfo
+	if err := r.Store.Get(ctx, "repo", &repo); err != nil {
+		return out, err
+	}
+	if !repo.At.IsZero() {
+		out.Repo = &repo
+	}
+	hist, err := r.Store.SourceHistories(ctx)
+	if err != nil {
+		return out, err
+	}
+
+	cfg, err := r.Config()
+	if err != nil {
+		out.ConfigError = err.Error()
+		return out, nil
+	}
+	out.Engine, out.Every, out.Stale = cfg.Engine.Type, Duration(cfg.Every.D()), Duration(cfg.StaleAfter.D())
+	sources, err := cfg.Resolve(os.ReadDir)
+	if err != nil {
+		out.ConfigError = err.Error()
+		return out, nil
+	}
+	now := time.Now()
+	hostPath := r.HostPaths(ctx)
+	for _, s := range sources {
+		h := hist[s.Name]
+		st := SourceStatus{Source: s, Latest: h.Latest, Success: h.Success, Partial: len(s.Excludes) > 0}
+		if s.Path != "" {
+			st.HostPath = hostPath(s.Path)
+		}
+		st.State = state(h, out.Running != 0 && out.Current == s.Name, now, cfg.StaleAfter.D())
+		out.Sources = append(out.Sources, st)
+	}
+	return out, nil
+}
+
+func state(h store.SourceHistory, running bool, now time.Time, staleAfter time.Duration) string {
+	switch {
+	case running:
+		return StateRunning
+	case h.Success == nil:
+		if h.Latest != nil && h.Latest.Status == "failed" {
+			return StateErrors
+		}
+		return StateNever
+	case now.Sub(h.Success.Finished) > staleAfter:
+		return StateStale
+	case h.Latest != nil && slices.Contains([]string{"failed", "warn"}, h.Latest.Status):
+		return StateErrors
+	}
+	return StateOK
+}
+
+// Duration is a duration without empty units: 12h, 1h30m, 25h.
+func Duration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
