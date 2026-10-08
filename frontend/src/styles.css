@@ -398,6 +398,9 @@ pre {
   letter-spacing: -0.02em;
   color: var(--fg-3);
 }
+.figure.good .figure-value {
+  color: var(--good);
+}
 .figure.warn .figure-value {
   color: var(--warn);
 }
@@ -895,4 +898,75 @@ label.btn {
 .table td:last-child {
   width: 34px;
   padding-right: 0;
+}
+
+/* ── Keep ───────────────────────────────────────────────────────────────── */
+.source-where {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+.log {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.log-time {
+  color: var(--fg-3);
+  margin-right: 10px;
+}
+.log-warn {
+  color: var(--warn);
+}
+.log-error {
+  color: var(--bad);
+}
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+  padding-top: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  max-width: 28px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+.bar:hover {
+  opacity: 1;
+}
+.config-text {
+  max-height: none;
+}
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0;
+  font-size: 13px;
+}
+.kv dt {
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }

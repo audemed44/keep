@@ -1,4 +1,4 @@
-import type { Item, Session } from "./types";
+import type { LogLine, Overview, Run, RunSource, Session } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -43,10 +43,12 @@ export const api = {
   login: (token: string) => request<Session>("/api/session", json("POST", { token })),
   logout: () => request<void>("/api/session", { method: "DELETE" }),
 
-  items: () => request<Item[]>("/api/items"),
-  saveItem: (it: Partial<Item>) =>
-    it.id
-      ? request<Item>(`/api/items/${it.id}`, json("PUT", it))
-      : request<Item>("/api/items", json("POST", it)),
-  deleteItem: (id: number) => request<void>(`/api/items/${id}`, { method: "DELETE" }),
+  overview: () => request<Overview>("/api/overview"),
+  config: () => request<{ file: string; text: string }>("/api/config"),
+  runs: (before = 0) => request<Run[]>(`/api/runs${before ? `?before=${before}` : ""}`),
+  run: (id: number) => request<Run>(`/api/runs/${id}`),
+  runLog: (id: number, after = 0) => request<LogLine[]>(`/api/runs/${id}/log?after=${after}`),
+  runNow: () => request<{ id: number }>("/api/runs", { method: "POST" }),
+  sourceHistory: (name: string) =>
+    request<RunSource[]>(`/api/sources/${encodeURIComponent(name)}/history`),
 };

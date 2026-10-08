@@ -1,9 +1,11 @@
 import { ArrowLeft, LogOut } from "lucide-preact";
 import { useEffect, useState } from "preact/hooks";
 import { api, setUnauthorizedHandler } from "./api";
-import { AboutPage } from "./components/AboutPage";
-import { ItemsPage } from "./components/ItemsPage";
+import { ConfigPage } from "./components/ConfigPage";
 import { Login } from "./components/Login";
+import { OverviewPage } from "./components/OverviewPage";
+import { RunPage, RunsPage } from "./components/RunsPage";
+import { SourcePage } from "./components/SourcePage";
 import { onLinkClick, useRoute, type Route } from "./router";
 import type { Session } from "./types";
 
@@ -32,9 +34,10 @@ export function App() {
   );
 }
 
-const NAV: { page: Route["page"]; href: string; label: string }[] = [
-  { page: "home", href: "/", label: "Items" },
-  { page: "about", href: "/about", label: "About" },
+const NAV: { pages: Route["page"][]; href: string; label: string }[] = [
+  { pages: ["home", "source"], href: "/", label: "Sources" },
+  { pages: ["runs", "run"], href: "/runs", label: "Runs" },
+  { pages: ["config"], href: "/config", label: "Config" },
 ];
 
 function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }) {
@@ -59,7 +62,7 @@ function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }
         <span class="spacer" />
         <nav class="topnav" aria-label="Pages">
           {NAV.map((n) => (
-            <a key={n.page} class={route.page === n.page ? "active" : ""} href={n.href}>
+            <a key={n.href} class={n.pages.includes(route.page) ? "active" : ""} href={n.href}>
               {n.label}
             </a>
           ))}
@@ -69,8 +72,11 @@ function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }
         </button>
       </header>
       <main>
-        {route.page === "home" && <ItemsPage />}
-        {route.page === "about" && <AboutPage />}
+        {route.page === "home" && <OverviewPage />}
+        {route.page === "runs" && <RunsPage />}
+        {route.page === "run" && <RunPage id={route.id} />}
+        {route.page === "source" && <SourcePage name={route.name} />}
+        {route.page === "config" && <ConfigPage />}
       </main>
     </div>
   );
