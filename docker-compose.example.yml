@@ -1,0 +1,18 @@
+# Skeleton: TODO one line on what it does.
+services:
+  skeleton:
+    image: ghcr.io/audemed44/skeleton:latest
+    container_name: skeleton
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      # openssl rand -hex 32; what you sign in with, and Foyer's widget key.
+      - SKELETON_TOKEN=${SKELETON_TOKEN}
+      - TZ=Asia/Kolkata
+      # Optional: Foyer's address, linked from the header.
+      # - HOMEPAGE_URL=https://home.example.com
+    volumes:
+      - ./skeleton:/data
+    ports:
+      - "8089:8080"
+    mem_limit: 64m
