@@ -23,13 +23,37 @@ type Store struct {
 }
 
 const schema = `
-CREATE TABLE IF NOT EXISTS items (
-	id      INTEGER PRIMARY KEY AUTOINCREMENT,
-	title   TEXT NOT NULL,
-	note    TEXT NOT NULL DEFAULT '',
-	done    INTEGER NOT NULL DEFAULT 0,
-	created INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS runs (
+	id       INTEGER PRIMARY KEY AUTOINCREMENT,
+	started  INTEGER NOT NULL,
+	finished INTEGER NOT NULL DEFAULT 0,
+	trigger  TEXT NOT NULL,              -- schedule, manual or foyer
+	status   TEXT NOT NULL,              -- running, ok, warn or failed
+	summary  TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS run_sources (
+	run_id    INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	name      TEXT NOT NULL,
+	strategy  TEXT NOT NULL,
+	status    TEXT NOT NULL,             -- running, ok, warn or failed
+	started   INTEGER NOT NULL DEFAULT 0,
+	finished  INTEGER NOT NULL DEFAULT 0,
+	size      INTEGER NOT NULL DEFAULT 0, -- bytes in the snapshots
+	files     INTEGER NOT NULL DEFAULT 0,
+	databases INTEGER NOT NULL DEFAULT 0, -- databases copied or dumped
+	message   TEXT NOT NULL DEFAULT '',
+	snapshots TEXT NOT NULL DEFAULT '[]', -- JSON: the engine's snapshot ids
+	PRIMARY KEY (run_id, name)
+);
+CREATE INDEX IF NOT EXISTS run_sources_name ON run_sources (name, run_id);
+CREATE TABLE IF NOT EXISTS run_log (
+	id     INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	at     INTEGER NOT NULL,
+	level  TEXT NOT NULL,                -- info, warn or error
+	text   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_log_run ON run_log (run_id, id);
 CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
@@ -38,9 +62,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 // migrations run after the schema, once each: append, never edit or
 // reorder. migrations[i] moves the database to user_version i+1.
-var migrations = []string{
-	// `ALTER TABLE items ADD COLUMN due INTEGER NOT NULL DEFAULT 0`,
-}
+var migrations = []string{}
 
 // Open opens (or creates) the database.
 func Open(path string) (*Store, error) {
