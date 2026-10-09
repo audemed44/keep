@@ -68,3 +68,71 @@ export interface LogLine {
   level: "info" | "warn" | "error";
   text: string;
 }
+
+export interface Retention {
+  latest: number;
+  hourly: number;
+  daily: number;
+  weekly: number;
+  monthly: number;
+  annual: number;
+}
+
+/** A source entry: a folder or database to back up, or changes to a found folder. */
+export interface SourceConfig {
+  name: string;
+  path?: string;
+  strategy: string;
+  excludes?: string[] | null;
+  container?: string;
+  volume?: string;
+  command?: string;
+  skip?: boolean;
+}
+
+/** A watched folder: every folder inside it is a source. */
+export interface RootConfig {
+  path: string;
+  skip?: string[] | null;
+}
+
+export interface Config {
+  every: string;
+  stale_after: string;
+  roots: RootConfig[];
+  sources: SourceConfig[];
+  excludes: string[];
+  engine: { type: string; container: string };
+  staging: string;
+  retention: Retention;
+}
+
+export interface Coverage {
+  source?: string;
+  excluded?: boolean;
+  root?: boolean;
+  contains?: number;
+}
+
+export interface Folder extends Coverage {
+  name: string;
+  path: string;
+}
+
+export interface Listing extends Coverage {
+  path: string;
+  parent?: string;
+  roots: string[];
+  folders: Folder[];
+}
+
+export interface Suggestion {
+  container: string;
+  image: string;
+  running: boolean;
+  kind: "folder" | "database" | "volume";
+  path?: string;
+  volume?: string;
+  strategy?: string;
+  mount: string;
+}

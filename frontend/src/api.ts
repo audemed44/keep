@@ -1,4 +1,13 @@
-import type { LogLine, Overview, Run, RunSource, Session } from "./types";
+import type {
+  Config,
+  Listing,
+  LogLine,
+  Overview,
+  Run,
+  RunSource,
+  Session,
+  Suggestion,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -44,7 +53,11 @@ export const api = {
   logout: () => request<void>("/api/session", { method: "DELETE" }),
 
   overview: () => request<Overview>("/api/overview"),
-  config: () => request<{ file: string; text: string }>("/api/config"),
+  config: () => request<{ config: Config; roots: string[] }>("/api/config"),
+  saveConfig: (c: Config) =>
+    request<{ config: Config; roots: string[] }>("/api/config", json("PUT", c)),
+  browse: (path = "") => request<Listing>(`/api/browse?path=${encodeURIComponent(path)}`),
+  suggestions: () => request<Suggestion[]>("/api/suggestions"),
   runs: (before = 0) => request<Run[]>(`/api/runs${before ? `?before=${before}` : ""}`),
   run: (id: number) => request<Run>(`/api/runs/${id}`),
   runLog: (id: number, after = 0) => request<LogLine[]>(`/api/runs/${id}/log?after=${after}`),

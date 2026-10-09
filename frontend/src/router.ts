@@ -6,14 +6,14 @@ import { useEffect, useState } from "preact/hooks";
  *   /runs                every run
  *   /runs/:id            one run: its sources and log
  *   /sources/:name       one source: size over time, recent runs
- *   /config              keep.yml, as it is on disk
+ *   /settings            schedule, retention, watched folders
  */
 export type Route =
   | { page: "home" }
   | { page: "runs" }
   | { page: "run"; id: number }
   | { page: "source"; name: string }
-  | { page: "config" };
+  | { page: "settings" };
 
 export function parseRoute(path: string): Route {
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
@@ -25,8 +25,9 @@ export function parseRoute(path: string): Route {
     case "sources":
       if (parts[1]) return { page: "source", name: parts[1] };
       break;
-    case "config":
-      return { page: "config" };
+    case "settings":
+    case "config": // the old address
+      return { page: "settings" };
   }
   return { page: "home" };
 }

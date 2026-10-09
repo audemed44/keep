@@ -1,9 +1,11 @@
-import { Play } from "lucide-preact";
+import { Database, FolderPlus, HardDrive, Play, Plus } from "lucide-preact";
+import { useState } from "preact/hooks";
 import { api } from "../api";
 import { useData } from "../hooks";
 import { navigate } from "../router";
 import { ago, bytes, plural, RUN_LABEL, runTone, STATE_LABEL, stateTone, until } from "../lib";
-import type { Overview, SourceStatus } from "../types";
+import type { Overview, SourceStatus, Suggestion } from "../types";
+import { AddSourceDialog, type AddStart } from "./AddSource";
 import { Dot, Empty, ErrorNote, Figure, SectionHead, useAction } from "./ui";
 
 const RANK: Record<string, number> = { errors: 0, stale: 1, never: 2, running: 3, ok: 4 };
@@ -11,6 +13,8 @@ const RANK: Record<string, number> = { errors: 0, stale: 1, never: 2, running: 3
 /** Sources with their state, the last run, and Run now. */
 export function OverviewPage() {
   const { data: o, error, reload } = useData(api.overview, 5_000);
+  const { data: suggestions, reload: reloadSuggestions } = useData(api.suggestions, 60_000);
+  const [adding, setAdding] = useState<AddStart | null>(null);
   const action = useAction();
 
   const runNow = () =>
@@ -58,19 +62,24 @@ export function OverviewPage() {
       {action.error && <ErrorNote>{action.error}</ErrorNote>}
       {o?.config_error && (
         <ErrorNote>
-          <strong>{o.config_file}:</strong> {o.config_error}. Runs fail until it's fixed.
+          <strong>Settings:</strong> {o.config_error}. Runs fail until it's fixed in{" "}
+          <a class="link" href="/settings">
+            Settings
+          </a>
+          .
         </ErrorNote>
       )}
 
       <section class="section">
         <SectionHead index={1} title="Sources">
           {o && <span class="muted">{plural(o.sources.length, "source")}</span>}
+          <button class="btn btn-primary btn-small" onClick={() => setAdding({})}>
+            <Plus size={14} /> Add
+          </button>
         </SectionHead>
         {!o && !error && <div class="loading loading-list" />}
         {o && o.sources.length === 0 && !o.config_error && (
-          <Empty>
-            Nothing to back up yet. Add roots or sources to <code>{o.config_file}</code>.
-          </Empty>
+          <Empty>Nothing to back up yet. Add a folder, or one of the suggestions below.</Empty>
         )}
         {sources.length > 0 && (
           <div class="list">
@@ -80,6 +89,80 @@ export function OverviewPage() {
           </div>
         )}
       </section>
+
+      {suggestions && suggestions.length > 0 && (
+        <section class="section">
+          <SectionHead index={2} title="Not backed up">
+            <span class="muted">what containers keep that no source covers</span>
+          </SectionHead>
+          <div class="list">
+            {suggestions.map((sg) => (
+              <SuggestionRow
+                key={sg.container + (sg.path ?? sg.volume)}
+                sg={sg}
+                onAdd={() =>
+                  setAdding({
+                    path: sg.path,
+                    strategy: sg.strategy,
+                    container: sg.container,
+                    volume: sg.volume,
+                  })
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {adding && (
+        <AddSourceDialog
+          start={adding}
+          onClose={() => setAdding(null)}
+          onSaved={() => {
+            setAdding(null);
+            reload();
+            reloadSuggestions();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function SuggestionRow({ sg, onAdd }: { sg: Suggestion; onAdd: () => void }) {
+  const what =
+    sg.kind === "folder"
+      ? sg.path
+      : sg.kind === "database"
+        ? `${sg.strategy} database in volume ${sg.volume}`
+        : `volume ${sg.volume}`;
+  return (
+    <div class="list-row">
+      <span class="suggest-icon" aria-hidden="true">
+        {sg.kind === "folder" ? (
+          <FolderPlus size={15} />
+        ) : sg.kind === "database" ? (
+          <Database size={15} />
+        ) : (
+          <HardDrive size={15} />
+        )}
+      </span>
+      <div class="list-main suggest-main">
+        <span class="list-title">
+          {sg.container} {!sg.running && <span class="muted">· stopped</span>}
+        </span>
+        <span class="list-sub mono">{what}</span>
+        {sg.kind === "volume" && (
+          <span class="list-sub">
+            A Docker volume Keep can't reach. Dump it if it's a database, or move it to a folder.
+          </span>
+        )}
+      </div>
+      {sg.kind !== "volume" && (
+        <button class="btn btn-ghost btn-small" onClick={onAdd}>
+          <Plus size={14} /> Add
+        </button>
+      )}
     </div>
   );
 }

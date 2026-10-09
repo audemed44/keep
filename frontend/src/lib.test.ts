@@ -33,7 +33,7 @@ describe("router", () => {
     expect(parseRoute("/runs/12")).toEqual({ page: "run", id: 12 });
     expect(parseRoute("/runs/x")).toEqual({ page: "runs" });
     expect(parseRoute("/sources/my%20app")).toEqual({ page: "source", name: "my app" });
-    expect(parseRoute("/config")).toEqual({ page: "config" });
+    expect(parseRoute("/settings")).toEqual({ page: "settings" });
     expect(parseRoute("/nope")).toEqual({ page: "home" });
   });
 });
