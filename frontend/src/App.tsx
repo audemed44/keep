@@ -1,10 +1,10 @@
 import { ArrowLeft, LogOut } from "lucide-preact";
 import { useEffect, useState } from "preact/hooks";
 import { api, setUnauthorizedHandler } from "./api";
-import { ConfigPage } from "./components/ConfigPage";
 import { Login } from "./components/Login";
 import { OverviewPage } from "./components/OverviewPage";
 import { RunPage, RunsPage } from "./components/RunsPage";
+import { SettingsPage } from "./components/SettingsPage";
 import { SourcePage } from "./components/SourcePage";
 import { onLinkClick, useRoute, type Route } from "./router";
 import type { Session } from "./types";
@@ -37,7 +37,7 @@ export function App() {
 const NAV: { pages: Route["page"][]; href: string; label: string }[] = [
   { pages: ["home", "source"], href: "/", label: "Sources" },
   { pages: ["runs", "run"], href: "/runs", label: "Runs" },
-  { pages: ["config"], href: "/config", label: "Config" },
+  { pages: ["settings"], href: "/settings", label: "Settings" },
 ];
 
 function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }) {
@@ -76,7 +76,7 @@ function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }
         {route.page === "runs" && <RunsPage />}
         {route.page === "run" && <RunPage id={route.id} />}
         {route.page === "source" && <SourcePage name={route.name} />}
-        {route.page === "config" && <ConfigPage />}
+        {route.page === "settings" && <SettingsPage />}
       </main>
     </div>
   );

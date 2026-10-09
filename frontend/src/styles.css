@@ -970,3 +970,57 @@ label.btn {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.picker-here {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.picker-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.picker-note {
+  margin: 0;
+}
+.picker-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.picker-row {
+  width: 100%;
+  text-align: left;
+  gap: 10px;
+}
+.picked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.picked code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.suggest-icon {
+  color: var(--fg-3);
+  display: inline-flex;
+}
+.retention {
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+}
+.save-bar {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.picker-row .list-main,
+.suggest-main {
+  flex: 1;
+}

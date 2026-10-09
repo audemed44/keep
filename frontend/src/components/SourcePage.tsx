@@ -1,7 +1,12 @@
+import { Pencil, Trash2 } from "lucide-preact";
+import { useState } from "preact/hooks";
 import { api } from "../api";
+import { lines, removeSource, setSource } from "../configEdit";
+import { navigate } from "../router";
+import type { SourceStatus } from "../types";
 import { useData } from "../hooks";
 import { ago, bytes, plural, RUN_LABEL, runTone, STATE_LABEL, stateTone, took } from "../lib";
-import { Dot, Empty, ErrorNote, Figure, SectionHead } from "./ui";
+import { Dialog, Dot, Empty, ErrorNote, Field, Figure, SectionHead, useAction } from "./ui";
 
 const STRATEGY: Record<string, string> = {
   sqlite: "Files, with every SQLite database copied consistently (VACUUM INTO)",
@@ -13,7 +18,9 @@ const STRATEGY: Record<string, string> = {
 
 /** One source: how it's backed up, its size over time, its recent runs. */
 export function SourcePage({ name }: { name: string }) {
-  const { data: o, error } = useData(api.overview, 10_000);
+  const { data: o, error, reload } = useData(api.overview, 10_000);
+  const [editing, setEditing] = useState(false);
+  const removing = useAction();
   const { data: history } = useData(() => api.sourceHistory(name), 0, [name]);
   const s = o?.sources.find((x) => x.name === name);
 
@@ -44,7 +51,29 @@ export function SourcePage({ name }: { name: string }) {
 
       {s && (
         <section class="section">
-          <SectionHead index={1} title="Setup" />
+          <SectionHead index={1} title="Setup">
+            <button class="btn btn-ghost btn-small" onClick={() => setEditing(true)}>
+              <Pencil size={13} /> Edit
+            </button>
+            <button
+              class="btn btn-danger btn-small"
+              disabled={removing.busy}
+              onClick={() =>
+                removing.run(async () => {
+                  const what = s.discovered
+                    ? `Stop backing up ${name}? It's skipped in its watched folder; the snapshots stay in the repository.`
+                    : `Stop backing up ${name}? The snapshots stay in the repository.`;
+                  if (!confirm(what)) return;
+                  const { config } = await api.config();
+                  await api.saveConfig(removeSource(config, name, s.discovered));
+                  navigate("/");
+                })
+              }
+            >
+              <Trash2 size={13} /> Stop backing up
+            </button>
+          </SectionHead>
+          {removing.error && <ErrorNote>{removing.error}</ErrorNote>}
           <dl class="kv">
             <dt>Strategy</dt>
             <dd>
@@ -82,7 +111,7 @@ export function SourcePage({ name }: { name: string }) {
               )}
             </dd>
             <dt>From</dt>
-            <dd>{s.discovered ? "A folder in a root" : "Listed in keep.yml"}</dd>
+            <dd>{s.discovered ? "A folder inside a watched folder" : "Added on its own"}</dd>
           </dl>
         </section>
       )}
@@ -137,6 +166,101 @@ export function SourcePage({ name }: { name: string }) {
           </div>
         </section>
       )}
+      {editing && s && (
+        <EditSourceDialog
+          s={s}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            reload();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Changes how a source is backed up: strategy, containers, what's left out. */
+function EditSourceDialog(props: { s: SourceStatus; onClose: () => void; onSaved: () => void }) {
+  const { s } = props;
+  const database = s.strategy === "postgres" || s.strategy === "mariadb";
+  const [strategy, setStrategy] = useState(s.strategy);
+  const [container, setContainer] = useState(s.container ?? "");
+  const [excludes, setExcludes] = useState((s.excludes ?? []).join("\n"));
+  const { busy, error, run } = useAction();
+  const save = (e: Event) => {
+    e.preventDefault();
+    run(async () => {
+      const { config } = await api.config();
+      const own = config.sources.find((x) => x.name === s.name);
+      await api.saveConfig(
+        setSource(config, {
+          ...own,
+          name: s.name,
+          path: s.discovered ? undefined : s.path,
+          strategy,
+          container: container.trim() || undefined,
+          excludes: lines(excludes),
+          skip: false,
+        }),
+      );
+      props.onSaved();
+    });
+  };
+  return (
+    <Dialog
+      title={`Edit ${s.name}`}
+      onClose={props.onClose}
+      footer={
+        <>
+          <span class="spacer" />
+          <button class="btn btn-ghost" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button class="btn btn-primary" form="edit-form" disabled={busy}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <form id="edit-form" class="form" onSubmit={save}>
+        {!database && (
+          <Field label="Strategy">
+            <select
+              class="input"
+              value={strategy}
+              onChange={(e) => setStrategy(e.currentTarget.value)}
+            >
+              <option value="sqlite">Files, with SQLite copies</option>
+              <option value="files">Plain files</option>
+              <option value="stop">Stop containers during the snapshot</option>
+            </select>
+          </Field>
+        )}
+        {(strategy === "stop" || database) && (
+          <Field label={database ? "Container" : "Containers to stop"}>
+            <input
+              class="input"
+              value={container}
+              onInput={(e) => setContainer(e.currentTarget.value)}
+            />
+          </Field>
+        )}
+        {!database && (
+          <Field
+            label="Leave out"
+            hint="One per line: /library from the top of the folder, *.log anywhere, cache/ for folders."
+          >
+            <textarea
+              class="input"
+              rows={4}
+              value={excludes}
+              onInput={(e) => setExcludes(e.currentTarget.value)}
+            />
+          </Field>
+        )}
+        {error && <div class="form-error">{error}</div>}
+      </form>
+    </Dialog>
   );
 }
