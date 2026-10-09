@@ -38,4 +38,7 @@ services:
       - ./:/data:ro
       # Kopia writes restores here (the default: next to staging).
       - ./keep/restores:/data/keep/restores
+      # And the local copy's repository, when one is set in Settings → Local
+      # copy (Keep needs it read-write at the same path too).
+      # - /mnt/hdd/keep-repo:/mnt/hdd/keep-repo
       # … its config, cache and repository

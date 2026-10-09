@@ -6,7 +6,8 @@ Keep decides **when** and **how** the homelab is backed up. A proven engine
 ([Kopia](https://kopia.io)) does the storage: chunking, dedup, encryption,
 retention and the upload. Keep never touches any of that. It makes each
 backup consistent, runs it, reports on it, keeps the history, checks the
-repository every week, and restores into a folder of its own.
+repository every week, keeps a second repository on another disk, and
+restores into a folder of its own.
 
 ![Sources](docs/images/overview-desktop.png)
 
@@ -117,7 +118,8 @@ Everything is set in the UI and kept in Keep's database:
   means skipping it; the snapshots stay in the repository.
 - **Settings**: schedule, how many snapshots to keep (set on every path in
   Kopia, so retention lives in Keep), patterns left out everywhere, the
-  verify, old snapshots, the engine's container, staging and restores.
+  verify, the local copy, old snapshots, the engine's container, staging
+  and restores.
 
 Excludes use the part of gitignore syntax Kopia and restic read the same
 way: `/x` from the top of the source, `name` at any depth, `dir/` for
@@ -151,6 +153,37 @@ which checks every snapshot's structure and reads a share of the files back
 It's a job of its own, with its own heartbeat (set in Settings), so a failing
 check doesn't look like a failing backup. The verify also refreshes Keep's
 copy of the snapshot list, which restores and old snapshots read.
+
+## Local copy
+
+Set a folder under **Local copy** in Settings, on another disk than the
+data, and every backup also snapshots each source into a second, separate
+repository there: from the same prepared files, right after the main
+repository, in one more engine call. It doesn't depend on the main
+repository or the network, so it's still there if those are lost, and a
+backup that's in it is restored from it (nothing comes from Drive).
+
+- Keep creates the repository in an empty folder the first time, with the
+  engine container's password (`KOPIA_PASSWORD`), and keeps Kopia's
+  connection to it in its own config file (`/app/config/keep-local.config`,
+  cache in `/app/cache/keep-local`). Kopia runs its own maintenance on it.
+  Without Keep: `kopia --config-file=/app/config/keep-local.config snapshot
+  list`.
+- It's a separate repository, not a copy of the main one: damage in one
+  can't reach the other. Retention is the same, the verify checks both, and
+  old snapshots are deleted from both.
+- A source that fails there isn't a failed backup: it's noted on the run
+  (a warning) and on the local copy's own heartbeat, if one is set. A
+  source the main repository failed still goes in the local copy.
+- The folder can't be inside anything that's backed up, staging or
+  restores. The engine must see it at the same path, read-write:
+
+```yaml
+  kopia:
+    volumes:
+      - /mnt/hdd:/mnt/hdd:ro
+      - /mnt/hdd/keep-repo:/mnt/hdd/keep-repo
+```
 
 ## Old snapshots
 

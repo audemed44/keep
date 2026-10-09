@@ -11,7 +11,11 @@ has the backup engine (Kopia, via `docker exec`) snapshot it, records the
 run and pings a Lookout heartbeat. Runs are jobs of a kind: `backup`,
 `verify` (weekly repository check, its own heartbeat, refreshes the
 snapshot listing and deletes retired paths) and `restore` (into the
-restores folder, never in place). A Go server (`cmd/keep`, `internal/`)
+restores folder, never in place). With a local copy set, each backup also
+snapshots every source into a second repository in a local folder
+(`runner/local.go`, the same engine with its own `--config-file`); a
+failure there is a warning, never a failed source, and restores use it
+when the backup is in it. A Go server (`cmd/keep`, `internal/`)
 serves a JSON API and the Preact + TypeScript frontend (`frontend/`), built
 into `web/dist` and embedded in the binary. State lives in SQLite at
 `$KEEP_DATA_DIR/keep.db` (`internal/store`), including the settings (what
@@ -46,7 +50,8 @@ to back up, edited in the UI; a v1 `keep.yml` is imported once).
   static and cgo-free) and gopkg.in/yaml.v3 (keep.yml is hand-edited, with
   comments). Justify any new one, Go or npm.
 - **Keep never does chunking, encryption or storage itself**, and never
-  writes to an app's files: only to its own folder, staging and restores.
+  writes to an app's files: only to its own folder, staging, restores and
+  the local copy's folder (only when it's empty or a repository already).
   Restores never go in place. Restore browsing and downloads must stay
   inside the restore folder (`inRestore` resolves symlinks). Engine
   output is read from the CLI's `--json`, not Kopia's undocumented API.
