@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/audemed44/keep/internal/runner"
+	"github.com/audemed44/keep/internal/store"
 )
 
 func (s *Server) getOverview(w http.ResponseWriter, r *http.Request) {
@@ -27,8 +28,20 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
-func (s *Server) startRun(w http.ResponseWriter, _ *http.Request) {
-	id, err := s.Runner.Trigger("manual")
+// startRun starts a backup, or the job of the kind in the body
+// ({"kind": "verify"}).
+func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
+	body := struct {
+		Kind string `json:"kind"`
+	}{Kind: store.KindBackup}
+	if r.ContentLength > 0 && !readJSON(w, r, 1<<10, &body) {
+		return
+	}
+	if body.Kind != store.KindBackup && body.Kind != store.KindVerify {
+		writeError(w, http.StatusBadRequest, "kind: backup or verify")
+		return
+	}
+	id, err := s.Runner.Start(runner.Job{Kind: body.Kind, Trigger: "manual"})
 	if errors.Is(err, runner.ErrBusy) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "id": id})
 		return

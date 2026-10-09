@@ -38,7 +38,9 @@ type Overview struct {
 	Sources []SourceStatus `json:"sources"`
 	State
 	LastRun *store.Run `json:"last_run,omitempty"`
-	Repo    *RepoInfo  `json:"repo,omitempty"`
+	// LastVerify is the last repository check.
+	LastVerify *store.Run `json:"last_verify,omitempty"`
+	Repo       *RepoInfo  `json:"repo,omitempty"`
 	// ConfigError is set when the settings can't be read or resolved
 	// (a folder went missing).
 	ConfigError string `json:"config_error,omitempty"`
@@ -48,10 +50,15 @@ type Overview struct {
 // last run.
 func (r *Runner) Overview(ctx context.Context) (Overview, error) {
 	out := Overview{Sources: []SourceStatus{}, State: r.State()}
-	if last, ok, err := r.Store.LastRun(ctx); err != nil {
+	if last, ok, err := r.Store.LastRun(ctx, store.KindBackup); err != nil {
 		return out, err
 	} else if ok {
 		out.LastRun = &last
+	}
+	if last, ok, err := r.Store.LastRun(ctx, store.KindVerify); err != nil {
+		return out, err
+	} else if ok {
+		out.LastVerify = &last
 	}
 	var repo RepoInfo
 	if err := r.Store.Get(ctx, "repo", &repo); err != nil {
@@ -84,7 +91,7 @@ func (r *Runner) Overview(ctx context.Context) (Overview, error) {
 		if s.Path != "" {
 			st.HostPath = hostPath(s.Path)
 		}
-		st.State = state(h, out.Running != 0 && out.Current == s.Name, now, cfg.StaleAfter.D())
+		st.State = state(h, out.Backing() && out.Current == s.Name, now, cfg.StaleAfter.D())
 		out.Sources = append(out.Sources, st)
 	}
 	return out, nil

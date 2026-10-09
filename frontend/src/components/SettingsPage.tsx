@@ -1,8 +1,9 @@
-import { FolderPlus, Trash2, Undo2 } from "lucide-preact";
+import { FolderPlus, ShieldCheck, Trash2, Undo2 } from "lucide-preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { lines, restoreSource, unwatchFolder, watchFolder } from "../configEdit";
 import { useData, useUnsavedWarning } from "../hooks";
+import { navigate } from "../router";
 import type { Config, Retention } from "../types";
 import { FolderPicker } from "./AddSource";
 import { Dialog, Empty, ErrorNote, Field, SectionHead, useAction } from "./ui";
@@ -24,6 +25,7 @@ export function SettingsPage() {
   const [picking, setPicking] = useState(false);
   const [saved, setSaved] = useState(false);
   const save = useAction();
+  const verify = useAction();
 
   useEffect(() => {
     if (data) {
@@ -191,7 +193,70 @@ export function SettingsPage() {
           </section>
 
           <section class="section">
-            <SectionHead index={5} title="Engine" />
+            <SectionHead index={5} title="Verify">
+              <button
+                type="button"
+                class="btn btn-ghost btn-small"
+                disabled={verify.busy}
+                onClick={() =>
+                  verify.run(async () => {
+                    const { id } = await api.runNow("verify");
+                    if (id) navigate(`/runs/${id}`);
+                  })
+                }
+              >
+                <ShieldCheck size={14} /> Verify now
+              </button>
+            </SectionHead>
+            <p class="muted">
+              Checks the repository's structure and reads a sample of the files back, as a job of
+              its own. It also refreshes the list of snapshots that restores and old snapshots read.
+            </p>
+            {verify.error && <ErrorNote>{verify.error}</ErrorNote>}
+            <div class="form-grid">
+              <Field label="Verify every" hint="Like 168h for a week.">
+                <input
+                  class="input"
+                  value={cfg.verify.every}
+                  onInput={(e) =>
+                    setCfg({ ...cfg, verify: { ...cfg.verify, every: e.currentTarget.value } })
+                  }
+                />
+              </Field>
+              <Field label="Files read back (%)" hint="Each one is downloaded from the repository.">
+                <input
+                  class="input"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={cfg.verify.percent}
+                  onInput={(e) =>
+                    setCfg({
+                      ...cfg,
+                      verify: { ...cfg.verify, percent: Number(e.currentTarget.value) || 0 },
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="Heartbeat URL"
+                hint="Pinged at the start and end of each verify (/fail when it finds problems), like the backup's."
+                class="span-2"
+              >
+                <input
+                  class="input mono"
+                  placeholder="https://lookout…/ping/…"
+                  value={cfg.verify.heartbeat ?? ""}
+                  onInput={(e) =>
+                    setCfg({ ...cfg, verify: { ...cfg.verify, heartbeat: e.currentTarget.value } })
+                  }
+                />
+              </Field>
+            </div>
+          </section>
+
+          <section class="section">
+            <SectionHead index={6} title="Engine" />
             <div class="form-grid">
               <Field
                 label={`${cfg.engine.type} container`}

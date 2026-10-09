@@ -62,7 +62,21 @@ CREATE TABLE IF NOT EXISTS settings (
 
 // migrations run after the schema, once each: append, never edit or
 // reorder. migrations[i] moves the database to user_version i+1.
-var migrations = []string{}
+var migrations = []string{
+	// Runs are jobs of a kind: backup, verify or restore.
+	`ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'backup';
+	 CREATE INDEX runs_kind ON runs (kind, id);
+	 CREATE TABLE snapshots (
+		id          TEXT PRIMARY KEY,           -- the engine's snapshot id
+		path        TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',   -- Keep run N for Keep's own
+		start       INTEGER NOT NULL,
+		end         INTEGER NOT NULL,
+		size        INTEGER NOT NULL DEFAULT 0,
+		files       INTEGER NOT NULL DEFAULT 0
+	 );
+	 CREATE INDEX snapshots_path ON snapshots (path, start);`,
+}
 
 // Open opens (or creates) the database.
 func Open(path string) (*Store, error) {

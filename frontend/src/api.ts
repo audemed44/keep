@@ -61,7 +61,8 @@ export const api = {
   runs: (before = 0) => request<Run[]>(`/api/runs${before ? `?before=${before}` : ""}`),
   run: (id: number) => request<Run>(`/api/runs/${id}`),
   runLog: (id: number, after = 0) => request<LogLine[]>(`/api/runs/${id}/log?after=${after}`),
-  runNow: () => request<{ id: number }>("/api/runs", { method: "POST" }),
+  runNow: (kind: "backup" | "verify" = "backup") =>
+    request<{ id: number }>("/api/runs", json("POST", { kind })),
   sourceHistory: (name: string) =>
     request<RunSource[]>(`/api/sources/${encodeURIComponent(name)}/history`),
 };

@@ -1,7 +1,8 @@
-// Package runner runs backups: on a schedule or on request, one at a time.
-// A run prepares each source (database copies and dumps into staging),
-// has the engine snapshot it, records the result and reports to a
-// healthchecks-style heartbeat (Lookout).
+// Package runner runs Keep's jobs, on a schedule or on request, one at a
+// time. A backup prepares each source (database copies and dumps into
+// staging), has the engine snapshot it, records the result and reports to
+// a healthchecks-style heartbeat (Lookout). A verify checks the repository
+// and reports to its own heartbeat; a restore copies a backup out.
 package runner
 
 import (
@@ -57,10 +58,12 @@ type Runner struct {
 	client  *http.Client
 	trigger chan request
 
-	mu      sync.Mutex
-	running int64  // the run in progress, 0 when idle
-	current string // the source it's on
-	next    time.Time
+	mu       sync.Mutex
+	running  int64  // the run in progress, 0 when idle
+	kind     string // its kind
+	current  string // what it's on
+	next     time.Time
+	nextKind string
 }
 
 func New(o Options) *Runner {
@@ -104,24 +107,35 @@ func (r *Runner) HasConfig(ctx context.Context) bool {
 }
 
 // ErrBusy means a run is already in progress.
-var ErrBusy = errors.New("a backup is already running")
+var ErrBusy = errors.New("Keep is busy with another job")
+
+// Job is a run to do: a backup, a verify or a restore.
+type Job struct {
+	Kind    string
+	Trigger string // schedule, manual or foyer
+}
 
 // request asks the loop for a run; the loop answers its id on id.
 type request struct {
-	why string
+	job Job
 	id  chan int64
 }
 
-// Trigger asks for a run now and returns its id. When a run is already in
-// progress it returns that run's id with ErrBusy.
+// Trigger asks for a backup now; see Start.
 func (r *Runner) Trigger(why string) (int64, error) {
+	return r.Start(Job{Kind: store.KindBackup, Trigger: why})
+}
+
+// Start asks for a job now and returns its run id. When a run is already
+// in progress it returns that run's id with ErrBusy.
+func (r *Runner) Start(job Job) (int64, error) {
 	r.mu.Lock()
 	running := r.running
 	r.mu.Unlock()
 	if running != 0 {
 		return running, ErrBusy
 	}
-	req := request{why: why, id: make(chan int64, 1)}
+	req := request{job: job, id: make(chan int64, 1)}
 	select {
 	case r.trigger <- req:
 	default:
@@ -137,16 +151,21 @@ func (r *Runner) Trigger(why string) (int64, error) {
 
 // State is what the runner is doing now.
 type State struct {
-	Running int64     `json:"running,omitempty"` // run id
-	Current string    `json:"current,omitempty"` // source being backed up
-	Next    time.Time `json:"next"`
+	Running  int64     `json:"running,omitempty"` // run id
+	Kind     string    `json:"kind,omitempty"`    // its kind
+	Current  string    `json:"current,omitempty"` // what it's on: a source, for a backup
+	Next     time.Time `json:"next"`
+	NextKind string    `json:"next_kind"`
 }
 
 func (r *Runner) State() State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return State{Running: r.running, Current: r.current, Next: r.next}
+	return State{Running: r.running, Kind: r.kind, Current: r.current, Next: r.next, NextKind: r.nextKind}
 }
+
+// Backing is true when a backup is running.
+func (s State) Backing() bool { return s.Running != 0 && s.Kind == store.KindBackup }
 
 // Loop runs backups on schedule until ctx ends.
 func (r *Runner) Loop(ctx context.Context) {
@@ -154,12 +173,12 @@ func (r *Runner) Loop(ctx context.Context) {
 		slog.Error("marking interrupted runs", "err", err)
 	}
 	for {
-		next := r.schedule(ctx)
+		next, kind := r.schedule(ctx)
 		r.mu.Lock()
-		r.next = next
+		r.next, r.nextKind = next, kind
 		r.mu.Unlock()
 		timer := time.NewTimer(time.Until(next))
-		req := request{why: "schedule"}
+		req := request{job: Job{Kind: kind, Trigger: "schedule"}}
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -172,32 +191,57 @@ func (r *Runner) Loop(ctx context.Context) {
 	}
 }
 
-// schedule is when the next run is due: Every after the last one started.
-// An overdue run starts a minute after Keep does.
-func (r *Runner) schedule(ctx context.Context) time.Time {
+// schedule is when the next job is due, and which: a backup Every after
+// the last one started, a verify Verify.Every after the last verify (the
+// first a verify period after the first backup). An overdue job starts a
+// minute after Keep does; a backup goes first.
+func (r *Runner) schedule(ctx context.Context) (time.Time, string) {
 	now := time.Now()
-	every := 12 * time.Hour
+	every, verifyEvery := 12*time.Hour, 7*24*time.Hour
 	if c, err := r.Config(); err == nil {
-		every = c.Every.D()
+		every, verifyEvery = c.Every.D(), c.Verify.Every.D()
 	}
-	last, ok, err := r.Store.LastRun(ctx)
-	switch {
-	case err != nil || !ok:
-		return now.Add(r.FirstRunAfter)
-	case last.Started.Add(every).Before(now):
-		return now.Add(time.Minute)
+	last, ok, err := r.Store.LastRun(ctx, store.KindBackup)
+	if err != nil || !ok {
+		return now.Add(r.FirstRunAfter), store.KindBackup
 	}
-	return last.Started.Add(every)
+	backup := due(now, last.Started, every)
+	verify := due(now, last.Started, verifyEvery)
+	if v, ok, err := r.Store.LastRun(ctx, store.KindVerify); err == nil && ok {
+		verify = due(now, v.Started, verifyEvery)
+	} else if first, err := r.Store.FirstRun(ctx, store.KindBackup); err == nil {
+		verify = due(now, first.Started, verifyEvery)
+	}
+	if verify.Before(backup) {
+		return verify, store.KindVerify
+	}
+	return backup, store.KindBackup
+}
+
+func due(now, last time.Time, every time.Duration) time.Time {
+	if t := last.Add(every); t.After(now) {
+		return t
+	}
+	return now.Add(time.Minute)
 }
 
 // Run does one backup of every source and returns its id.
 func (r *Runner) Run(ctx context.Context, trigger string) int64 {
-	return r.runRequest(ctx, request{why: trigger})
+	return r.Do(ctx, Job{Kind: store.KindBackup, Trigger: trigger})
+}
+
+// Do runs a job now, in the caller's goroutine, and returns its id.
+func (r *Runner) Do(ctx context.Context, job Job) int64 {
+	return r.runRequest(ctx, request{job: job})
 }
 
 func (r *Runner) runRequest(ctx context.Context, req request) int64 {
+	job := req.job
+	if job.Kind == "" {
+		job.Kind = store.KindBackup
+	}
 	started := time.Now()
-	id, err := r.Store.StartRun(ctx, req.why, started)
+	id, err := r.Store.StartRun(ctx, job.Kind, job.Trigger, started)
 	if req.id != nil {
 		req.id <- id // 0 when it couldn't start
 	}
@@ -206,16 +250,23 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 		return 0
 	}
 	r.mu.Lock()
-	r.running = id
+	r.running, r.kind = id, job.Kind
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
-		r.running, r.current = 0, ""
+		r.running, r.kind, r.current = 0, "", ""
 		r.mu.Unlock()
 	}()
 
-	r.ping(ctx, "/start", "")
-	status, summary := r.run(ctx, id)
+	hb := r.heartbeat(job.Kind)
+	r.ping(ctx, hb, "/start", "")
+	var status, summary string
+	switch job.Kind {
+	case store.KindVerify:
+		status, summary = r.verify(ctx, id)
+	default:
+		status, summary = r.run(ctx, id)
+	}
 	// Record the end even when Keep is shutting down.
 	done := context.WithoutCancel(ctx)
 	if err := r.Store.FinishRun(done, id, status, summary, time.Now()); err != nil {
@@ -223,9 +274,9 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 	}
 	r.log(done, id, levelFor(status), "Finished in %s: %s", time.Since(started).Round(time.Second), summary)
 	if status == "failed" {
-		r.ping(done, "/fail", summary)
+		r.ping(done, hb, "/fail", summary)
 	} else {
-		r.ping(done, "", summary)
+		r.ping(done, hb, "", summary)
 	}
 	if err := r.Store.Prune(done, time.Now(), 90*24*time.Hour, 400*24*time.Hour); err != nil {
 		slog.Warn("pruning old runs", "err", err)
@@ -280,11 +331,25 @@ func (r *Runner) start(ctx context.Context, runID int64, source string, names []
 	}
 }
 
-func (r *Runner) ping(ctx context.Context, suffix, body string) {
-	if r.Heartbeat == "" {
+// heartbeat is the ping URL for a kind of job: KEEP_HEARTBEAT_URL for
+// backups, the verify setting for verifies, none for restores.
+func (r *Runner) heartbeat(kind string) string {
+	switch kind {
+	case store.KindBackup:
+		return r.Heartbeat
+	case store.KindVerify:
+		if c, err := r.Config(); err == nil {
+			return c.Verify.Heartbeat
+		}
+	}
+	return ""
+}
+
+func (r *Runner) ping(ctx context.Context, url, suffix, body string) {
+	if url == "" {
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(r.Heartbeat, "/")+suffix, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(url, "/")+suffix, strings.NewReader(body))
 	if err != nil {
 		slog.Warn("heartbeat", "err", err)
 		return
