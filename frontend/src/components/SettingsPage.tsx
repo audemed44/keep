@@ -309,6 +309,16 @@ export function SettingsPage() {
                   onInput={(e) => setCfg({ ...cfg, staging: e.currentTarget.value })}
                 />
               </Field>
+              <Field
+                label="Restores"
+                hint="Restores are written here; the engine must see it at the same path, read-write."
+              >
+                <input
+                  class="input"
+                  value={cfg.restores}
+                  onInput={(e) => setCfg({ ...cfg, restores: e.currentTarget.value })}
+                />
+              </Field>
             </div>
           </section>
 

@@ -119,6 +119,7 @@ export interface Config {
   excludes: string[];
   engine: { type: string; container: string };
   staging: string;
+  restores: string;
   retention: Retention;
   verify: { every: string; percent: number; heartbeat?: string };
   /** Paths whose snapshots are deleted on the first verify on or after a date. */
