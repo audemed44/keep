@@ -172,3 +172,14 @@ func (s *Server) downloadRestore(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprint(fi.Size()))
 	http.ServeContent(w, r, "", fi.ModTime(), f)
 }
+
+// repository lists the snapshots of paths Keep doesn't back up now, from
+// the last listing (the weekly verify).
+func (s *Server) repository(w http.ResponseWriter, r *http.Request) {
+	others, listed, err := s.Runner.OtherSources(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"listed": listed, "others": others})
+}

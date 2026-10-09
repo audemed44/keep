@@ -20,6 +20,7 @@ const base: Config = {
   staging: "/stack/keep/staging",
   retention: { latest: 10, hourly: 48, daily: 7, weekly: 4, monthly: 24, annual: 3 },
   verify: { every: "168h", percent: 5 },
+  retire: [],
 };
 
 describe("config edits", () => {

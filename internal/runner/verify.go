@@ -44,7 +44,11 @@ func (r *Runner) verify(ctx context.Context, id int64) (status, summary string) 
 		summary = fmt.Sprintf("%d problems found; %s", v.ErrorCount, summary)
 	}
 
-	if r.listSnapshots(ctx, id, eng) != nil && status == "ok" {
+	if err := r.listSnapshots(ctx, id, eng); err != nil {
+		if status == "ok" {
+			status = "warn"
+		}
+	} else if err := r.retire(ctx, id, eng, cfg); err != nil && status == "ok" {
 		status = "warn"
 	}
 	r.setCurrent("the repository size")

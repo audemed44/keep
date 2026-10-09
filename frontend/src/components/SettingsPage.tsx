@@ -1,9 +1,10 @@
-import { FolderPlus, ShieldCheck, Trash2, Undo2 } from "lucide-preact";
+import { ArchiveRestore, FolderPlus, ShieldCheck, Trash2, Undo2 } from "lucide-preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { lines, restoreSource, unwatchFolder, watchFolder } from "../configEdit";
 import { useData, useUnsavedWarning } from "../hooks";
 import { navigate } from "../router";
+import { ago, bytes, plural } from "../lib";
 import type { Config, Retention } from "../types";
 import { FolderPicker } from "./AddSource";
 import { Dialog, Empty, ErrorNote, Field, SectionHead, useAction } from "./ui";
@@ -255,8 +256,10 @@ export function SettingsPage() {
             </div>
           </section>
 
+          <OldSnapshots cfg={cfg} setCfg={setCfg} />
+
           <section class="section">
-            <SectionHead index={6} title="Engine" />
+            <SectionHead index={7} title="Engine" />
             <div class="form-grid">
               <Field
                 label={`${cfg.engine.type} container`}
@@ -305,5 +308,78 @@ export function SettingsPage() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+/**
+ * Snapshots of paths Keep doesn't back up now (from before Keep, or of
+ * removed sources). Nothing expires them, so each can get a date after
+ * which the weekly verify deletes them. Saved with the rest of the form.
+ */
+function OldSnapshots(props: { cfg: Config; setCfg: (c: Config) => void }) {
+  const { cfg, setCfg } = props;
+  const { data, error } = useData(api.repository);
+  const restore = useAction();
+  const dateFor = (p: string) => cfg.retire.find((r) => r.path === p)?.after ?? "";
+  const setDate = (p: string, after: string) =>
+    setCfg({
+      ...cfg,
+      retire: after
+        ? [...cfg.retire.filter((r) => r.path !== p), { path: p, after }]
+        : cfg.retire.filter((r) => r.path !== p),
+    });
+  const listed = data?.listed && !data.listed.startsWith("0001") ? data.listed : "";
+  return (
+    <section class="section">
+      <SectionHead index={6} title="Old snapshots" />
+      <p class="muted">
+        Snapshots in the repository of folders Keep doesn't back up now: from before Keep, or of
+        sources since removed. Nothing expires them; give one a date and the first verify on or
+        after it deletes them all.
+        {listed ? ` As of the last verify, ${ago(listed)}.` : " Listed by the first verify."}
+      </p>
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {restore.error && <ErrorNote>{restore.error}</ErrorNote>}
+      {data && data.others.length === 0 && listed && <Empty>None: Keep manages them all.</Empty>}
+      {data && data.others.length > 0 && (
+        <div class="list">
+          {data.others.map((o) => (
+            <div class="list-row old-row" key={o.path}>
+              <div class="list-main">
+                <span class="list-title mono">{o.path}</span>
+                <span class="list-sub">
+                  {plural(o.snapshots, "snapshot")}, {ago(o.oldest)} to {ago(o.newest)} · newest{" "}
+                  {bytes(o.size)} in {plural(o.files, "file")}
+                </span>
+              </div>
+              <label class="old-date">
+                <span class="field-label">Delete after</span>
+                <input
+                  class="input"
+                  type="date"
+                  value={dateFor(o.path)}
+                  onInput={(e) => setDate(o.path, e.currentTarget.value)}
+                />
+              </label>
+              <button
+                type="button"
+                class="icon-btn"
+                title="Restore the newest"
+                aria-label={`Restore the newest snapshot of ${o.path}`}
+                disabled={restore.busy}
+                onClick={() =>
+                  restore.run(async () => {
+                    const { id } = await api.startRestore({ snapshot: o.latest });
+                    navigate(`/runs/${id}`);
+                  })
+                }
+              >
+                <ArchiveRestore size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

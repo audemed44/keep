@@ -56,6 +56,23 @@ type Config struct {
 	Retention Retention `yaml:"retention" json:"retention"`
 	// Verify is the repository check, a job of its own.
 	Verify Verify `yaml:"verify" json:"verify"`
+	// Retire lists paths whose snapshots (taken before Keep, or of
+	// sources since removed) are deleted on the first verify on or after
+	// a date.
+	Retire []Retire `yaml:"retire" json:"retire"`
+}
+
+// Retire deletes every snapshot of Path once the date After (YYYY-MM-DD)
+// has come.
+type Retire struct {
+	Path  string `yaml:"path" json:"path"`
+	After string `yaml:"after" json:"after"`
+}
+
+// Due reports whether the date has come, on now's calendar day.
+func (r Retire) Due(now time.Time) bool {
+	d, err := time.ParseInLocation(time.DateOnly, r.After, now.Location())
+	return err == nil && !now.Before(d)
 }
 
 // Verify is how often the repository is checked and how much of it is
@@ -251,6 +268,20 @@ func (c Config) validate() (Config, error) {
 	c.Verify.Heartbeat = strings.TrimSpace(c.Verify.Heartbeat)
 	if h := c.Verify.Heartbeat; h != "" && !strings.HasPrefix(h, "https://") && !strings.HasPrefix(h, "http://") {
 		return Config{}, errors.New("verify: the heartbeat must be an http(s) URL")
+	}
+	c.Retire = slices.Clone(c.Retire)
+	if c.Retire == nil {
+		c.Retire = []Retire{}
+	}
+	retired := map[string]bool{}
+	for _, r := range c.Retire {
+		if !path.IsAbs(r.Path) || retired[r.Path] {
+			return Config{}, fmt.Errorf("retire: %q: an absolute path, listed once", r.Path)
+		}
+		retired[r.Path] = true
+		if _, err := time.Parse(time.DateOnly, r.After); err != nil {
+			return Config{}, fmt.Errorf("retire: %s: the date %q isn't like 2027-01-09", r.Path, r.After)
+		}
 	}
 	c.Roots = slices.Clone(c.Roots)
 	c.Sources = slices.Clone(c.Sources)

@@ -1057,3 +1057,19 @@ label.btn {
   align-items: center;
   gap: 8px;
 }
+.old-date {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.old-date .input {
+  width: 160px;
+}
+@media (max-width: 640px) {
+  .old-row {
+    flex-wrap: wrap;
+  }
+  .old-row .list-main {
+    flex-basis: 100%;
+  }
+}

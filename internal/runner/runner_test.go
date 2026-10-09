@@ -806,3 +806,50 @@ func TestRestore(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestOtherSourcesAndRetire(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	f.runner.Run(ctx, "manual")
+	now := time.Now()
+	f.engine.listed = append(f.engine.listed,
+		engine.Snapshot{ID: "old1", Path: "/data/shelfloom", Start: now.Add(-48 * time.Hour), Size: 10},
+		engine.Snapshot{ID: "old2", Path: "/data/shelfloom", Start: now.Add(-24 * time.Hour), Size: 20},
+		engine.Snapshot{ID: "old3", Path: "/koreader", Start: now.Add(-24 * time.Hour)},
+	)
+	cfg, _ := f.runner.Config()
+	cfg.Retire = []config.Retire{
+		{Path: "/data/shelfloom", After: now.Format(time.DateOnly)},
+		{Path: "/koreader", After: now.AddDate(0, 3, 0).Format(time.DateOnly)},
+		{Path: filepath.Join(f.root, "ledger"), After: "2020-01-01"}, // a source now: never deleted
+	}
+	if _, err := f.runner.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.listSnapshots(ctx, 0, f.engine); err != nil {
+		t.Fatal(err)
+	}
+	others, _, err := f.runner.OtherSources(ctx)
+	if err != nil || len(others) != 2 {
+		t.Fatalf("Keep's own paths aren't others: %+v %v", others, err)
+	}
+	if o := others[0]; o.Path != "/data/shelfloom" || o.Snapshots != 2 || o.Latest != "old2" || o.Size != 20 || o.RetireAfter == "" {
+		t.Fatalf("%+v", o)
+	}
+
+	id := f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	if run, _ := f.store.GetRun(ctx, id); run.Status != "warn" {
+		t.Fatalf("a retire date on a source is a warning: %+v", run)
+	}
+	if !slices.Equal(f.engine.deleted, []string{"old2", "old1"}) {
+		t.Fatalf("deleted %v", f.engine.deleted)
+	}
+	others, _, _ = f.runner.OtherSources(ctx)
+	if len(others) != 1 || others[0].Path != "/koreader" {
+		t.Fatalf("%+v", others)
+	}
+	cfg, _ = f.runner.Config()
+	if len(cfg.Retire) != 2 || slices.ContainsFunc(cfg.Retire, func(r config.Retire) bool { return r.Path == "/data/shelfloom" }) {
+		t.Fatalf("the done date stays in the settings: %+v", cfg.Retire)
+	}
+}

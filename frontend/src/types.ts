@@ -112,6 +112,20 @@ export interface Config {
   staging: string;
   retention: Retention;
   verify: { every: string; percent: number; heartbeat?: string };
+  /** Paths whose snapshots are deleted on the first verify on or after a date. */
+  retire: { path: string; after: string }[];
+}
+
+/** Snapshots of a path Keep doesn't back up now. */
+export interface OtherSource {
+  path: string;
+  snapshots: number;
+  oldest: string;
+  newest: string;
+  latest: string;
+  size: number;
+  files: number;
+  retire_after?: string;
 }
 
 export interface Coverage {
