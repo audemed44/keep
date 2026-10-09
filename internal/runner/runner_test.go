@@ -34,6 +34,12 @@ func (d *fakeDocker) Exec(_ context.Context, c string, cmd []string, stdout io.W
 	d.mu.Lock()
 	d.log = append(d.log, "exec "+c)
 	d.mu.Unlock()
+	switch cmd[0] {
+	case "chown":
+		return nil
+	case "rm":
+		return os.RemoveAll(cmd[len(cmd)-1])
+	}
 	if d.dump == "" {
 		return &docker.ExitError{Code: 1, Stderr: "connection refused"}
 	}
@@ -103,6 +109,32 @@ type fakeEngine struct {
 	verifyErr error
 	verified  []int // Verify calls' percents
 	deleted   []string
+	contents  map[string]map[string][]byte // snapshot id → file → content
+	restored  []string
+}
+
+func (e *fakeEngine) Restore(_ context.Context, id, sub, target string) error {
+	e.restored = append(e.restored, id+"/"+sub+" → "+target)
+	found := false
+	for f, data := range e.contents[id] {
+		rel := f
+		if sub != "" {
+			if f != sub && !strings.HasPrefix(f, sub+"/") {
+				continue
+			}
+			rel = strings.TrimPrefix(strings.TrimPrefix(f, sub), "/")
+		}
+		found = true
+		dst := filepath.Join(target, rel)
+		os.MkdirAll(filepath.Dir(dst), 0o755)
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return err
+		}
+	}
+	if !found {
+		return fmt.Errorf("%s: %w", sub, engine.ErrNotInSnapshot)
+	}
+	return nil
 }
 
 func (e *fakeEngine) Name() string { return "fake" }
@@ -128,7 +160,7 @@ func (e *fakeEngine) Configure(_ context.Context, p string, cur engine.Current, 
 	return nil
 }
 
-func (e *fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[string]engine.Snapshot, error) {
+func (e *fakeEngine) Snapshot(_ context.Context, paths []string, desc string) (map[string]engine.Snapshot, error) {
 	e.calls++
 	got := map[string]engine.Snapshot{}
 	var failed []string
@@ -165,7 +197,16 @@ func (e *fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[
 		}
 		e.taken[p] = files
 		e.n++
-		got[p] = engine.Snapshot{ID: fmt.Sprintf("snap%d", e.n), Path: p, Size: size, Files: int64(len(files))}
+		snap := engine.Snapshot{ID: fmt.Sprintf("snap%d", e.n), Path: p, Description: desc, Start: time.Now(), Size: size, Files: int64(len(files))}
+		got[p] = snap
+		e.listed = append(e.listed, snap)
+		if e.contents == nil {
+			e.contents = map[string]map[string][]byte{}
+		}
+		e.contents[snap.ID] = map[string][]byte{}
+		for _, f := range files {
+			e.contents[snap.ID][f], _ = os.ReadFile(filepath.Join(p, f))
+		}
 	}
 	if len(failed) > 0 {
 		return got, errors.New("exit status 1: " + strings.Join(failed, "\n"))
@@ -237,7 +278,7 @@ func newFixture(t *testing.T, yml string) *fixture {
 	t.Cleanup(func() { db.Close() })
 	f.store = db
 	f.docker = &fakeDocker{containers: map[string]docker.Container{
-		"kopia": {Name: "kopia", Running: true, Mounts: []docker.Mount{{Source: f.root, Destination: f.root}}},
+		"kopia": {Name: "kopia", Running: true, Mounts: []docker.Mount{{Source: f.root, Destination: f.root, RW: true}}},
 	}}
 	f.engine = &fakeEngine{ignores: map[string][]string{}, taken: map[string][]string{}, fail: map[string]bool{}}
 	f.pings = &pings{}
@@ -674,5 +715,94 @@ func TestScheduleVerify(t *testing.T) {
 	next, kind = f.runner.schedule(ctx)
 	if kind != store.KindBackup || time.Until(next) < 11*time.Hour {
 		t.Fatalf("after the verify: %s in %s", kind, time.Until(next))
+	}
+}
+
+func TestRestore(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	run := f.runner.Run(ctx, "manual")
+	restores := filepath.Join(f.root, "keep", "restores")
+
+	// The source's points: the run, from its history (nothing listed yet).
+	cfg, _ := f.runner.Config()
+	ledger := config.Source{Name: "ledger", Path: filepath.Join(f.root, "ledger")}
+	points, err := f.runner.RestorePoints(ctx, cfg, ledger)
+	if err != nil || len(points) != 1 || points[0].Run != run {
+		t.Fatalf("%+v %v", points, err)
+	}
+
+	// Everything: the files, and the database from its staged copy.
+	id := f.runner.Do(ctx, Job{Kind: store.KindRestore, Trigger: "manual", Restore: &RestoreSpec{Source: "ledger", Run: run}})
+	got, _ := f.store.GetRun(ctx, id)
+	if got.Status != "ok" || got.Kind != store.KindRestore {
+		t.Fatalf("%+v", got)
+	}
+	list, err := f.runner.Restores(ctx)
+	if err != nil || len(list) != 1 || !list[0].Complete || list[0].Files != 2 || list[0].RunID != id {
+		t.Fatalf("%+v %v", list, err)
+	}
+	dir := list[0].Dir
+	if !strings.HasPrefix(dir, restores+"/ledger-") {
+		t.Fatal(dir)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "notes.txt")); string(b) != "hi" {
+		t.Fatalf("notes.txt: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ledger.db")); err != nil {
+		t.Fatal("the staged database isn't in the restore")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "x.sync-conflict-1")); err == nil {
+		t.Fatal("an excluded file came back")
+	}
+
+	// One file, which only the staged copies have.
+	id = f.runner.Do(ctx, Job{Kind: store.KindRestore, Restore: &RestoreSpec{Source: "ledger", Run: run, Path: "/ledger.db"}})
+	if got, _ := f.store.GetRun(ctx, id); got.Status != "ok" {
+		t.Fatalf("%+v", got)
+	}
+	// Not in the backup at all; and no going up.
+	for _, p := range []string{"nope.txt", "../keep"} {
+		id = f.runner.Do(ctx, Job{Kind: store.KindRestore, Restore: &RestoreSpec{Source: "ledger", Run: run, Path: p}})
+		if got, _ := f.store.GetRun(ctx, id); got.Status != "failed" {
+			t.Fatalf("%s: %+v", p, got)
+		}
+	}
+	if list, _ := f.runner.Restores(ctx); len(list) != 2 {
+		t.Fatalf("a restore that brought nothing back left a folder: %+v", list)
+	}
+
+	// The next backup leaves restores out of Keep's own source.
+	f.runner.Run(ctx, "manual")
+	for _, file := range f.engine.taken[filepath.Join(f.root, "keep")] {
+		if strings.HasPrefix(file, "restores") {
+			t.Fatalf("keep's snapshot took %s", file)
+		}
+	}
+
+	// Old restores are deleted; a folder outside restores can't be named.
+	if _, err := f.runner.RestoreDir("../ledger"); err == nil {
+		t.Fatal("a name with .. was accepted")
+	}
+	list, _ = f.runner.Restores(ctx)
+	old := list[len(list)-1]
+	old.Expires = time.Now().Add(-time.Minute)
+	f.store.Put(ctx, "restore:"+old.Name, old)
+	f.runner.cleanRestores(ctx)
+	if _, err := os.Stat(old.Dir); err == nil {
+		t.Fatal("an expired restore is still there")
+	}
+	if after, _ := f.runner.Restores(ctx); len(after) != len(list)-1 {
+		t.Fatalf("%d restores, want %d", len(after), len(list)-1)
+	}
+	if err := f.runner.DeleteRestore(ctx, list[0].Name); err != nil {
+		t.Fatal(err)
+	}
+
+	// The engine must be able to write to the restores folder.
+	f.docker.containers["kopia"] = docker.Container{Name: "kopia", Running: true, Mounts: []docker.Mount{{Source: f.root, Destination: f.root}}}
+	id = f.runner.Do(ctx, Job{Kind: store.KindRestore, Restore: &RestoreSpec{Source: "ledger", Run: run}})
+	if got, _ := f.store.GetRun(ctx, id); got.Status != "failed" || !strings.Contains(got.Summary, "read-write") {
+		t.Fatalf("%+v", got)
 	}
 }

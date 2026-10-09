@@ -183,3 +183,26 @@ func TestKopiaDelete(t *testing.T) {
 		t.Fatal(f.cmds)
 	}
 }
+
+func TestKopiaRestore(t *testing.T) {
+	f := &fakeExec{}
+	k := &Kopia{Exec: f, Container: "kopia"}
+	if err := k.Restore(context.Background(), "3c89", "/sub/dir/", "/r/x/sub/dir"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Restore(context.Background(), "3c89", "", "/r/x"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"kopia: kopia snapshot restore 3c89/sub/dir /r/x/sub/dir --parallel=32 --skip-owners",
+		"kopia: kopia snapshot restore 3c89 /r/x --parallel=32 --skip-owners",
+	}
+	if strings.Join(f.cmds, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("%q", f.cmds)
+	}
+	// What kopia 0.23 says for a path the snapshot doesn't have.
+	f.err = map[string]error{"snapshot restore": errors.New("exit status 1: unable to get filesystem entry: error reading directory: entry not found")}
+	if err := k.Restore(context.Background(), "3c89", "nope", "/r/x/nope"); !errors.Is(err, ErrNotInSnapshot) {
+		t.Fatal(err)
+	}
+}

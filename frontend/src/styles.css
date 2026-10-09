@@ -1024,3 +1024,36 @@ label.btn {
 .suggest-main {
   flex: 1;
 }
+
+/* ── Restores ───────────────────────────────────────────────────────────── */
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.crumbs button {
+  font: inherit;
+}
+.list-button {
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.choice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

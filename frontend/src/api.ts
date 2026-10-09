@@ -3,6 +3,10 @@ import type {
   Listing,
   LogLine,
   Overview,
+  RestoreEntry,
+  RestoreInfo,
+  RestorePoint,
+  RestoreSpec,
   Run,
   RunSource,
   Session,
@@ -65,4 +69,20 @@ export const api = {
     request<{ id: number }>("/api/runs", json("POST", { kind })),
   sourceHistory: (name: string) =>
     request<RunSource[]>(`/api/sources/${encodeURIComponent(name)}/history`),
+
+  restorePoints: (name: string) =>
+    request<{ points: RestorePoint[]; listed: string }>(
+      `/api/sources/${encodeURIComponent(name)}/points`,
+    ),
+  restores: () => request<{ restores: RestoreInfo[]; keep_days: number }>("/api/restores"),
+  startRestore: (spec: RestoreSpec) => request<{ id: number }>("/api/restores", json("POST", spec)),
+  deleteRestore: (name: string) =>
+    request<void>(`/api/restores/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  browseRestore: (name: string, path = "") =>
+    request<{ path: string; entries: RestoreEntry[] }>(
+      `/api/restores/${encodeURIComponent(name)}/browse?path=${encodeURIComponent(path)}`,
+    ),
+  /** A download link for a file in a restore (the session cookie signs it). */
+  restoreFileURL: (name: string, path: string) =>
+    `/api/restores/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`,
 };

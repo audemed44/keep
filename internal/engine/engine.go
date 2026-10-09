@@ -9,6 +9,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
@@ -39,7 +40,14 @@ type Engine interface {
 	Verify(ctx context.Context, percent int) (Verified, error)
 	// Delete deletes snapshots.
 	Delete(ctx context.Context, ids []string) error
+	// Restore writes a snapshot, or the file or folder at subpath inside
+	// it, to target. The target's parent folder must exist. A subpath the
+	// snapshot doesn't have is ErrNotInSnapshot.
+	Restore(ctx context.Context, id, subpath, target string) error
 }
+
+// ErrNotInSnapshot is a restore of a path the snapshot doesn't have.
+var ErrNotInSnapshot = errors.New("not in the snapshot")
 
 type Verified struct {
 	Objects int64 `json:"objects"` // checked

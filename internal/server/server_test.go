@@ -2,9 +2,9 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,6 +93,9 @@ func (fakeEngine) Verify(context.Context, int) (engine.Verified, error) {
 	return engine.Verified{Objects: 1}, nil
 }
 func (fakeEngine) Delete(context.Context, []string) error { return nil }
+func (fakeEngine) Restore(context.Context, string, string, string) error {
+	return errors.New("not in these tests")
+}
 func (fakeEngine) Stats(context.Context) (engine.Stats, error) {
 	return engine.Stats{Size: 5_000_000}, nil
 }
@@ -390,6 +393,68 @@ func TestVerifyNow(t *testing.T) {
 		}
 	}
 	t.Fatal("the verify didn't finish")
+}
+
+func TestRestores(t *testing.T) {
+	h := newServer(t)
+	for _, body := range []string{`{}`, `{"source":"ledger"}`, `{"source":"ledger","run":1,"snapshot":"x"}`, `{"source":"ledger","run":1,"path":"../x"}`} {
+		if rec := do(h, "POST", "/api/restores", body, true); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", body, rec.Code)
+		}
+	}
+	h.runner.Run(context.Background(), "manual")
+	points := decode[struct {
+		Points []runner.RestorePoint `json:"points"`
+	}](t, do(h, "GET", "/api/sources/ledger/points", "", true))
+	if len(points.Points) != 1 || points.Points[0].Run != 1 {
+		t.Fatalf("%+v", points)
+	}
+	if rec := do(h, "GET", "/api/sources/nope/points", "", true); rec.Code != http.StatusNotFound {
+		t.Fatal(rec.Code)
+	}
+
+	// A restore folder as a restore job leaves it, plus a symlink out.
+	dir := filepath.Join(h.root, "restores", "ledger-20261009-1200-5")
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "notes.txt"), []byte("hello"), 0o644)
+	os.WriteFile(filepath.Join(h.base, "secret"), []byte("no"), 0o644)
+	os.Symlink(filepath.Join(h.base, "secret"), filepath.Join(dir, "escape"))
+	os.Symlink(h.base, filepath.Join(dir, "up"))
+
+	list := decode[struct {
+		Restores []runner.RestoreInfo `json:"restores"`
+		KeepDays int                  `json:"keep_days"`
+	}](t, do(h, "GET", "/api/restores", "", true))
+	if len(list.Restores) != 1 || list.Restores[0].Name != "ledger-20261009-1200-5" || list.KeepDays != 7 {
+		t.Fatalf("%+v", list)
+	}
+	b := decode[struct {
+		Entries []restoreEntry `json:"entries"`
+	}](t, do(h, "GET", "/api/restores/ledger-20261009-1200-5/browse", "", true))
+	if len(b.Entries) != 1 || b.Entries[0].Name != "sub" || !b.Entries[0].Dir {
+		t.Fatalf("symlinks aren't listed: %+v", b.Entries)
+	}
+	rec := do(h, "GET", "/api/restores/ledger-20261009-1200-5/file?path=sub/notes.txt", "", true)
+	if rec.Code != http.StatusOK || rec.Body.String() != "hello" || !strings.Contains(rec.Header().Get("Content-Disposition"), "notes.txt") {
+		t.Fatalf("%d %q %v", rec.Code, rec.Body, rec.Header())
+	}
+	for _, p := range []string{"escape", "up/secret", "../../secret", "sub"} {
+		if rec := do(h, "GET", "/api/restores/ledger-20261009-1200-5/file?path="+p, "", true); rec.Code == http.StatusOK {
+			t.Fatalf("%s was served", p)
+		}
+	}
+	if rec := do(h, "GET", "/api/restores/..%2Fstack/browse", "", true); rec.Code != http.StatusNotFound {
+		t.Fatalf("a name with .. : %d", rec.Code)
+	}
+	if rec := do(h, "DELETE", "/api/restores/ledger-20261009-1200-5", "", true); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Code)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("not deleted")
+	}
+	if _, err := os.Stat(filepath.Join(h.base, "secret")); err != nil {
+		t.Fatal("deleting a restore followed a symlink out of it")
+	}
 }
 
 func TestSPAFallback(t *testing.T) {

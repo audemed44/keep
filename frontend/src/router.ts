@@ -6,6 +6,8 @@ import { useEffect, useState } from "preact/hooks";
  *   /runs                every run
  *   /runs/:id            one run: its sources and log
  *   /sources/:name       one source: size over time, recent runs
+ *   /restores            restore folders
+ *   /restores/:name      one restore: browse and download
  *   /settings            schedule, retention, watched folders
  */
 export type Route =
@@ -13,6 +15,8 @@ export type Route =
   | { page: "runs" }
   | { page: "run"; id: number }
   | { page: "source"; name: string }
+  | { page: "restores" }
+  | { page: "restore"; name: string }
   | { page: "settings" };
 
 export function parseRoute(path: string): Route {
@@ -25,6 +29,8 @@ export function parseRoute(path: string): Route {
     case "sources":
       if (parts[1]) return { page: "source", name: parts[1] };
       break;
+    case "restores":
+      return parts[1] ? { page: "restore", name: parts[1] } : { page: "restores" };
     case "settings":
     case "config": // the old address
       return { page: "settings" };

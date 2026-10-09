@@ -154,6 +154,12 @@ func (s *Store) Get(ctx context.Context, key string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
 }
 
+// Delete removes a setting.
+func (s *Store) Delete(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key)
+	return err
+}
+
 // Put stores v as a JSON setting.
 func (s *Store) Put(ctx context.Context, key string, v any) error {
 	b, err := json.Marshal(v)

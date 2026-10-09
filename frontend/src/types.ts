@@ -143,3 +143,42 @@ export interface Suggestion {
   strategy?: string;
   mount: string;
 }
+
+/** A backup of a source that can be restored. */
+export interface RestorePoint {
+  run: number;
+  taken: string;
+  size: number;
+  files: number;
+}
+
+export interface RestoreSpec {
+  source?: string;
+  run?: number;
+  snapshot?: string;
+  path?: string;
+}
+
+/** A restore folder. */
+export interface RestoreInfo {
+  name: string;
+  dir: string;
+  label: string;
+  run?: number;
+  taken: string;
+  path?: string;
+  run_id: number;
+  created: string;
+  expires: string;
+  size: number;
+  files: number;
+  complete: boolean;
+}
+
+export interface RestoreEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+  modified: string;
+}

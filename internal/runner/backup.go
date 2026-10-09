@@ -164,8 +164,10 @@ func (r *Runner) prepare(ctx context.Context, cfg config.Config, pc pathCheck, r
 	}
 
 	ignores := slices.Concat(cfg.Excludes, s.Excludes)
-	if s.Path != "" && within(cfg.Staging, s.Path) {
-		ignores = append(ignores, config.Literal(rel(s.Path, cfg.Staging)))
+	if s.Path != "" {
+		for _, own := range cfg.KeepsOut(s.Path) {
+			ignores = append(ignores, config.Literal(own))
+		}
 	}
 	switch s.Strategy {
 	case config.SQLite:

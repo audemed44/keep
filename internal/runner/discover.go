@@ -147,7 +147,7 @@ func (r *Runner) Browse(ctx context.Context, p string) (Listing, error) {
 	}
 	for _, e := range entries {
 		full := path.Join(p, e.Name())
-		if !e.IsDir() || full == cfg.Staging {
+		if !e.IsDir() || full == cfg.Staging || full == cfg.Restores {
 			continue
 		}
 		out.Folders = append(out.Folders, Folder{Name: e.Name(), Path: full, Coverage: Cover(cfg, sources, full)})

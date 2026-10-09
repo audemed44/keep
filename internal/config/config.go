@@ -49,6 +49,9 @@ type Config struct {
 	// Staging is where dumps are written before their snapshot. The engine
 	// must see it at the same path.
 	Staging string `yaml:"staging" json:"staging"`
+	// Restores is where restores are written (never in place); the engine
+	// must see it at the same path, writable. Default: next to staging.
+	Restores string `yaml:"restores" json:"restores"`
 	// Retention is how many snapshots the engine keeps per source.
 	Retention Retention `yaml:"retention" json:"retention"`
 	// Verify is the repository check, a job of its own.
@@ -211,6 +214,16 @@ func (c Config) validate() (Config, error) {
 		return Config{}, errors.New("staging: must be an absolute path")
 	}
 	c.Staging = path.Clean(c.Staging)
+	if c.Restores == "" {
+		c.Restores = path.Join(path.Dir(c.Staging), "restores")
+	}
+	if !path.IsAbs(c.Restores) {
+		return Config{}, errors.New("restores: must be an absolute path")
+	}
+	c.Restores = path.Clean(c.Restores)
+	if within(c.Restores, c.Staging) || within(c.Staging, c.Restores) {
+		return Config{}, errors.New("restores and staging must be separate folders")
+	}
 	if c.Retention == (Retention{}) {
 		c.Retention = DefaultRetention
 	}
@@ -323,7 +336,7 @@ func (c Config) Resolve(readDir func(string) ([]os.DirEntry, error)) ([]Source, 
 		for _, e := range entries {
 			name := e.Name()
 			full := path.Join(r.Path, name)
-			if !e.IsDir() || strings.HasPrefix(name, ".") || slices.Contains(r.Skip, name) || full == c.Staging {
+			if !e.IsDir() || strings.HasPrefix(name, ".") || slices.Contains(r.Skip, name) || full == c.Staging || full == c.Restores {
 				continue
 			}
 			s := Source{Name: name, Path: full, Strategy: SQLite, Discovered: true}
@@ -386,4 +399,22 @@ func findName(list []Source, name string) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+// within reports whether p is dir or inside it.
+func within(p, dir string) bool {
+	p, dir = path.Clean(p), path.Clean(dir)
+	return p == dir || dir == "/" || strings.HasPrefix(p, dir+"/")
+}
+
+// KeepsOut lists Keep's own working folders (staging, restores) inside
+// dir, relative to it: they're never part of a snapshot of dir.
+func (c Config) KeepsOut(dir string) []string {
+	var out []string
+	for _, p := range []string{c.Staging, c.Restores} {
+		if within(p, dir) && p != path.Clean(dir) {
+			out = append(out, strings.TrimPrefix(p, path.Clean(dir)+"/"))
+		}
+	}
+	return out
 }

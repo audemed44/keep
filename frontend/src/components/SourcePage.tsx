@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from "lucide-preact";
+import { ArchiveRestore, Pencil, Trash2 } from "lucide-preact";
 import { useState } from "preact/hooks";
 import { api } from "../api";
 import { lines, removeSource, setSource } from "../configEdit";
@@ -6,6 +6,7 @@ import { navigate } from "../router";
 import type { SourceStatus } from "../types";
 import { useData } from "../hooks";
 import { ago, bytes, plural, RUN_LABEL, runTone, STATE_LABEL, stateTone, took } from "../lib";
+import { RestoreDialog } from "./RestoresPage";
 import { Dialog, Dot, Empty, ErrorNote, Field, Figure, SectionHead, useAction } from "./ui";
 
 const STRATEGY: Record<string, string> = {
@@ -20,6 +21,7 @@ const STRATEGY: Record<string, string> = {
 export function SourcePage({ name }: { name: string }) {
   const { data: o, error, reload } = useData(api.overview, 10_000);
   const [editing, setEditing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const removing = useAction();
   const { data: history } = useData(() => api.sourceHistory(name), 0, [name]);
   const s = o?.sources.find((x) => x.name === name);
@@ -52,6 +54,9 @@ export function SourcePage({ name }: { name: string }) {
       {s && (
         <section class="section">
           <SectionHead index={1} title="Setup">
+            <button class="btn btn-ghost btn-small" onClick={() => setRestoring(true)}>
+              <ArchiveRestore size={13} /> Restore
+            </button>
             <button class="btn btn-ghost btn-small" onClick={() => setEditing(true)}>
               <Pencil size={13} /> Edit
             </button>
@@ -166,6 +171,7 @@ export function SourcePage({ name }: { name: string }) {
           </div>
         </section>
       )}
+      {restoring && <RestoreDialog source={name} onClose={() => setRestoring(false)} />}
       {editing && s && (
         <EditSourceDialog
           s={s}

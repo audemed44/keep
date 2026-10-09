@@ -4,6 +4,7 @@ import { api, setUnauthorizedHandler } from "./api";
 import { Login } from "./components/Login";
 import { OverviewPage } from "./components/OverviewPage";
 import { RunPage, RunsPage } from "./components/RunsPage";
+import { RestorePage, RestoresPage } from "./components/RestoresPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { SourcePage } from "./components/SourcePage";
 import { onLinkClick, useRoute, type Route } from "./router";
@@ -37,6 +38,7 @@ export function App() {
 const NAV: { pages: Route["page"][]; href: string; label: string }[] = [
   { pages: ["home", "source"], href: "/", label: "Sources" },
   { pages: ["runs", "run"], href: "/runs", label: "Runs" },
+  { pages: ["restores", "restore"], href: "/restores", label: "Restores" },
   { pages: ["settings"], href: "/settings", label: "Settings" },
 ];
 
@@ -76,6 +78,8 @@ function Shell(props: { route: Route; foyerURL?: string; onSignOut: () => void }
         {route.page === "runs" && <RunsPage />}
         {route.page === "run" && <RunPage id={route.id} />}
         {route.page === "source" && <SourcePage name={route.name} />}
+        {route.page === "restores" && <RestoresPage />}
+        {route.page === "restore" && <RestorePage name={route.name} />}
         {route.page === "settings" && <SettingsPage />}
       </main>
     </div>
