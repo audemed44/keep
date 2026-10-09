@@ -321,6 +321,9 @@ func TestAfterRun(t *testing.T) {
 	if got["pg"].Volume != "pgdata" || got["pg"].Path != "" || got["pg"].Strategy != "postgres" {
 		t.Fatalf("%+v", got["pg"])
 	}
+	if r := got["romm"]; len(r.Excluded) != 1 || r.Excluded[0] != filepath.Join(h.root, "romm", "library") {
+		t.Fatalf("romm excluded: %+v", r)
+	}
 	if !got["romm"].Partial || got["lookout"].State != "errors" {
 		t.Fatalf("%+v", b.Sources)
 	}

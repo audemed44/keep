@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/audemed44/keep/internal/runner"
@@ -218,7 +221,26 @@ type foyerBackup struct {
 	Last     *time.Time `json:"last,omitempty"`
 	Size     int64      `json:"size"`
 	Files    int64      `json:"files"`
-	Partial  bool       `json:"partial,omitempty"`
+	// Partial is true when part of the folder is left out; Excluded lists
+	// those parts as host-path patterns (globs), so Foyer can mark what's
+	// really missing rather than the whole folder.
+	Partial  bool     `json:"partial,omitempty"`
+	Excluded []string `json:"excluded,omitempty"`
+}
+
+// excludedPaths turns a source's anchored excludes (/library,
+// /config/index-v2) into host-path patterns. Unanchored ones (*.log) match
+// files anywhere, which a folder-level map can't show.
+func excludedPaths(host string, patterns []string) []string {
+	var out []string
+	for _, p := range patterns {
+		p = strings.TrimSuffix(p, "/")
+		if host == "" || !strings.Contains(p, "/") {
+			continue
+		}
+		out = append(out, path.Join(host, p))
+	}
+	return out
 }
 
 func (s *Server) foyerBackups(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +250,7 @@ func (s *Server) foyerBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if o.ConfigError != "" {
-		writeError(w, http.StatusInternalServerError, "keep.yml: "+o.ConfigError)
+		writeError(w, http.StatusInternalServerError, "settings: "+o.ConfigError)
 		return
 	}
 	stale, _ := time.ParseDuration(o.Stale)
@@ -237,8 +259,14 @@ func (s *Server) foyerBackups(w http.ResponseWriter, r *http.Request) {
 		StaleHours int           `json:"stale_hours"`
 		Sources    []foyerBackup `json:"sources"`
 	}{Engine: o.Engine, StaleHours: int(stale.Hours()), Sources: []foyerBackup{}}
+	var global []string
+	if cfg, err := s.Runner.Config(); err == nil {
+		global = cfg.Excludes
+	}
 	for _, src := range o.Sources {
-		b := foyerBackup{Name: src.Name, Path: src.HostPath, Volume: src.Volume, Strategy: src.Strategy, State: src.State, Partial: src.Partial}
+		excluded := excludedPaths(src.HostPath, slices.Concat(global, src.Excludes))
+		b := foyerBackup{Name: src.Name, Path: src.HostPath, Volume: src.Volume, Strategy: src.Strategy, State: src.State,
+			Partial: src.Partial || len(excluded) > 0, Excluded: excluded}
 		if src.Success != nil {
 			b.Last, b.Size, b.Files = timePtr(src.Success.Finished), src.Success.Size, src.Success.Files
 		}
