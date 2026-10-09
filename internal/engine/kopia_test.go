@@ -25,42 +25,62 @@ func (f *fakeExec) Exec(_ context.Context, container string, cmd []string, stdou
 
 var ret = Retention{Latest: 10, Hourly: 48, Daily: 7, Weekly: 4, Monthly: 12, Annual: 3}
 
-func TestKopiaConfigure(t *testing.T) {
+func TestKopiaPolicies(t *testing.T) {
 	f := &fakeExec{out: map[string]string{
-		"policy show": `{"retention":{"keepLatest":10,"keepHourly":48,"keepDaily":7,"keepWeekly":4,"keepMonthly":24,"keepAnnual":3},` +
-			`"files":{"ignore":["/old.db","*.log"]},"scheduling":{"intervalSeconds":43200}}`,
+		"policy show": `{"retention":{"keepLatest":10,"keepHourly":48,"keepDaily":7,"keepWeekly":4,"keepMonthly":12,"keepAnnual":3},` +
+			`"files":{"ignore":["/ledger.db"]},"scheduling":{"manual":true}}` + "\n" +
+			`{"retention":{"keepLatest":10},"files":{},"scheduling":{"intervalSeconds":43200}}` + "\n",
 	}}
 	k := &Kopia{Exec: f, Container: "kopia"}
-	if err := k.Configure(context.Background(), "/data/ledger", Policy{Ignores: []string{"*.log", "/ledger.db"}, Retention: ret}); err != nil {
+	got, err := k.Policies(context.Background(), []string{"/data/ledger", "/data/keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cmds) != 1 || f.cmds[0] != "kopia: kopia policy show /data/ledger /data/keep --json" {
+		t.Fatalf("one call for every path: %q", f.cmds)
+	}
+	if !got[0].Manual || got[0].Retention == nil || *got[0].Retention != ret || got[0].Ignores[0] != "/ledger.db" {
+		t.Fatalf("%+v", got[0])
+	}
+	if got[1].Manual || got[1].Retention != nil {
+		t.Fatalf("partly set retention counts as not set: %+v", got[1])
+	}
+	// Fewer documents than paths is an error, not a silent mismatch.
+	if _, err := k.Policies(context.Background(), []string{"/a", "/b", "/c"}); err == nil {
+		t.Fatal("no error for a missing policy")
+	}
+}
+
+func TestKopiaConfigure(t *testing.T) {
+	f := &fakeExec{}
+	k := &Kopia{Exec: f, Container: "kopia"}
+	cur := Current{Ignores: []string{"/old.db", "*.log"}, Retention: &Retention{Latest: 10, Hourly: 48, Daily: 7, Weekly: 4, Monthly: 24, Annual: 3}}
+	if err := k.Configure(context.Background(), "/data/ledger", cur, Policy{Ignores: []string{"*.log", "/ledger.db"}, Retention: ret}); err != nil {
 		t.Fatal(err)
 	}
 	want := "kopia: kopia policy set /data/ledger --manual --remove-ignore=/old.db --add-ignore=/ledger.db " +
 		"--keep-latest=10 --keep-hourly=48 --keep-daily=7 --keep-weekly=4 --keep-monthly=12 --keep-annual=3"
-	if len(f.cmds) != 2 || f.cmds[1] != want {
+	if len(f.cmds) != 1 || f.cmds[0] != want {
 		t.Fatalf("got %q", f.cmds)
 	}
 
 	// Already as wanted: no policy set.
-	f = &fakeExec{out: map[string]string{
-		"policy show": `{"retention":{"keepLatest":10,"keepHourly":48,"keepDaily":7,"keepWeekly":4,"keepMonthly":12,"keepAnnual":3},` +
-			`"files":{"ignore":["/ledger.db"]},"scheduling":{"manual":true}}`,
-	}}
-	k.Exec = f
-	if err := k.Configure(context.Background(), "/data/ledger", Policy{Ignores: []string{"/ledger.db"}, Retention: ret}); err != nil {
+	f.cmds = nil
+	cur = Current{Ignores: []string{"/ledger.db"}, Retention: &ret, Manual: true}
+	if err := k.Configure(context.Background(), "/data/ledger", cur, Policy{Ignores: []string{"/ledger.db"}, Retention: ret}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.cmds) != 1 {
+	if len(f.cmds) != 0 {
 		t.Fatalf("got %q", f.cmds)
 	}
 
-	// No ignores still sets a list of its own, so a parent's don't apply.
-	f = &fakeExec{out: map[string]string{"policy show": `{"files":{"ignore":["/keep.db"]},"scheduling":{"manual":true}}`}}
-	k.Exec = f
-	if err := k.Configure(context.Background(), "/data/keep/staging/keep", Policy{Retention: ret}); err != nil {
+	// No ignores still sets a list of its own, so a parent's don't apply,
+	// and retention inherited (not set on the path) is set explicitly.
+	cur = Current{Ignores: []string{"/keep.db"}, Manual: true}
+	if err := k.Configure(context.Background(), "/data/keep/staging/keep", cur, Policy{Retention: ret}); err != nil {
 		t.Fatal(err)
 	}
-	// Retention inherited (not set on the path) is set explicitly.
-	if !strings.Contains(f.cmds[1], "--add-ignore="+noInherit) || !strings.Contains(f.cmds[1], "--keep-latest=10") {
+	if !strings.Contains(f.cmds[0], "--add-ignore="+noInherit) || !strings.Contains(f.cmds[0], "--keep-latest=10") {
 		t.Fatalf("got %q", f.cmds)
 	}
 }

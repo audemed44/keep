@@ -39,73 +39,82 @@ func (k *Kopia) run(ctx context.Context, args ...string) ([]byte, error) {
 // keep/keep.db was left out because the keep source ignores /keep.db.
 const noInherit = "/.keep-sets-no-ignores"
 
-func (k *Kopia) Configure(ctx context.Context, path string, pol Policy) error {
+// Policies reads every path's policy with one policy show, which prints
+// one JSON document per path, in the order given.
+func (k *Kopia) Policies(ctx context.Context, paths []string) ([]Current, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	raw, err := k.run(ctx, append(append([]string{"policy", "show"}, paths...), "--json")...)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	out := make([]Current, 0, len(paths))
+	for range paths {
+		var p struct {
+			Retention struct {
+				KeepLatest  *int `json:"keepLatest"`
+				KeepHourly  *int `json:"keepHourly"`
+				KeepDaily   *int `json:"keepDaily"`
+				KeepWeekly  *int `json:"keepWeekly"`
+				KeepMonthly *int `json:"keepMonthly"`
+				KeepAnnual  *int `json:"keepAnnual"`
+			} `json:"retention"`
+			Files struct {
+				Ignore []string `json:"ignore"`
+			} `json:"files"`
+			Scheduling struct {
+				Manual bool `json:"manual"`
+			} `json:"scheduling"`
+		}
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("kopia policy show: %d of %d policies read: %w", len(out), len(paths), err)
+		}
+		c := Current{Ignores: p.Files.Ignore, Manual: p.Scheduling.Manual}
+		r := p.Retention
+		if r.KeepLatest != nil && r.KeepHourly != nil && r.KeepDaily != nil && r.KeepWeekly != nil &&
+			r.KeepMonthly != nil && r.KeepAnnual != nil {
+			c.Retention = &Retention{Latest: *r.KeepLatest, Hourly: *r.KeepHourly, Daily: *r.KeepDaily,
+				Weekly: *r.KeepWeekly, Monthly: *r.KeepMonthly, Annual: *r.KeepAnnual}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func (k *Kopia) Configure(ctx context.Context, path string, cur Current, pol Policy) error {
 	ignores := pol.Ignores
 	if len(ignores) == 0 {
 		ignores = []string{noInherit}
 	}
-	raw, err := k.run(ctx, "policy", "show", path, "--json")
-	if err != nil {
-		return err
-	}
-	var p struct {
-		Retention struct {
-			KeepLatest  *int `json:"keepLatest"`
-			KeepHourly  *int `json:"keepHourly"`
-			KeepDaily   *int `json:"keepDaily"`
-			KeepWeekly  *int `json:"keepWeekly"`
-			KeepMonthly *int `json:"keepMonthly"`
-			KeepAnnual  *int `json:"keepAnnual"`
-		} `json:"retention"`
-		Files struct {
-			Ignore []string `json:"ignore"`
-		} `json:"files"`
-		Scheduling struct {
-			Manual bool `json:"manual"`
-		} `json:"scheduling"`
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return fmt.Errorf("kopia policy show: %w", err)
-	}
 	args := []string{"policy", "set", path}
-	if !p.Scheduling.Manual {
+	if !cur.Manual {
 		args = append(args, "--manual")
 	}
-	for _, ig := range p.Files.Ignore {
+	for _, ig := range cur.Ignores {
 		if !slices.Contains(ignores, ig) {
 			args = append(args, "--remove-ignore="+ig)
 		}
 	}
 	for _, ig := range ignores {
-		if !slices.Contains(p.Files.Ignore, ig) {
+		if !slices.Contains(cur.Ignores, ig) {
 			args = append(args, "--add-ignore="+ig)
 		}
 	}
 	// policy show reports inherited retention too, so it can't tell
 	// whether the path has its own. Whenever anything changes, all six are
 	// set, so a path Keep has configured always carries Keep's retention.
-	r, cur := pol.Retention, p.Retention
-	var keep []string
-	same := true
-	for _, x := range []struct {
-		flag string
-		have *int
-		want int
-	}{
-		{"keep-latest", cur.KeepLatest, r.Latest}, {"keep-hourly", cur.KeepHourly, r.Hourly},
-		{"keep-daily", cur.KeepDaily, r.Daily}, {"keep-weekly", cur.KeepWeekly, r.Weekly},
-		{"keep-monthly", cur.KeepMonthly, r.Monthly}, {"keep-annual", cur.KeepAnnual, r.Annual},
-	} {
-		keep = append(keep, fmt.Sprintf("--%s=%d", x.flag, x.want))
-		same = same && x.have != nil && *x.have == x.want
-	}
-	if !same || len(args) > 3 {
-		args = append(args, keep...)
+	if len(args) > 3 || cur.Retention == nil || *cur.Retention != pol.Retention {
+		r := pol.Retention
+		args = append(args, fmt.Sprintf("--keep-latest=%d", r.Latest), fmt.Sprintf("--keep-hourly=%d", r.Hourly),
+			fmt.Sprintf("--keep-daily=%d", r.Daily), fmt.Sprintf("--keep-weekly=%d", r.Weekly),
+			fmt.Sprintf("--keep-monthly=%d", r.Monthly), fmt.Sprintf("--keep-annual=%d", r.Annual))
 	}
 	if len(args) == 3 {
 		return nil // already as wanted
 	}
-	_, err = k.run(ctx, args...)
+	_, err := k.run(ctx, args...)
 	return err
 }
 

@@ -16,10 +16,14 @@ import (
 type Engine interface {
 	// Name is the engine's name, for reports ("kopia").
 	Name() string
+	// Policies reads the policies paths have now, in one go, in the same
+	// order.
+	Policies(ctx context.Context, paths []string) ([]Current, error)
 	// Configure makes path a source Keep schedules (the engine's own
 	// schedule off) with exactly this policy: ignores not inherited from
-	// parent folders or the engine's global settings.
-	Configure(ctx context.Context, path string, p Policy) error
+	// parent folders or the engine's global settings. cur is what Policies
+	// read; nothing is set when it already matches.
+	Configure(ctx context.Context, path string, cur Current, want Policy) error
 	// Snapshot takes a snapshot of each path, in one go: opening the
 	// repository is the slow part (tens of seconds over rclone). Paths that
 	// failed are missing from the map, and the error says why. The engine
@@ -33,6 +37,15 @@ type Engine interface {
 type Policy struct {
 	Ignores   []string  `json:"ignores"`
 	Retention Retention `json:"retention"`
+}
+
+// Current is a path's policy as the engine has it.
+type Current struct {
+	Ignores []string
+	// Retention is nil when any of the counts isn't set.
+	Retention *Retention
+	// Manual is true when the engine's own schedule is off.
+	Manual bool
 }
 
 // Retention is the keep-* rules Kopia and restic share.

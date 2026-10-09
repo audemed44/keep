@@ -70,8 +70,11 @@ func (fakeDocker) Start(context.Context, string) error { return nil }
 
 type fakeEngine struct{ fail string }
 
-func (fakeEngine) Name() string                                           { return "fake" }
-func (fakeEngine) Configure(context.Context, string, engine.Policy) error { return nil }
+func (fakeEngine) Name() string { return "fake" }
+func (fakeEngine) Policies(_ context.Context, paths []string) ([]engine.Current, error) {
+	return make([]engine.Current, len(paths)), nil
+}
+func (fakeEngine) Configure(context.Context, string, engine.Current, engine.Policy) error { return nil }
 func (e fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[string]engine.Snapshot, error) {
 	got := map[string]engine.Snapshot{}
 	for _, p := range paths {

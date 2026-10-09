@@ -94,13 +94,29 @@ type fakeEngine struct {
 	taken   map[string][]string // path → files in its snapshot
 	fail    map[string]bool
 	n       int
-	// calls counts Snapshot calls, configured Configure calls.
-	calls, configured int
+	// calls counts Snapshot calls, configured policies set, reads Policies
+	// calls and read the paths they read.
+	calls, configured, reads, read int
 }
 
 func (e *fakeEngine) Name() string { return "fake" }
 
-func (e *fakeEngine) Configure(_ context.Context, p string, pol engine.Policy) error {
+func (e *fakeEngine) Policies(_ context.Context, paths []string) ([]engine.Current, error) {
+	e.reads++
+	e.read += len(paths)
+	out := make([]engine.Current, len(paths))
+	for i, p := range paths {
+		if ig, ok := e.ignores[p]; ok {
+			out[i] = engine.Current{Ignores: ig, Manual: true}
+		}
+	}
+	return out, nil
+}
+
+func (e *fakeEngine) Configure(_ context.Context, p string, cur engine.Current, pol engine.Policy) error {
+	if cur.Manual && slices.Equal(cur.Ignores, pol.Ignores) {
+		return nil
+	}
 	e.ignores[p] = pol.Ignores
 	e.configured++
 	return nil
@@ -516,5 +532,48 @@ func TestEngineCallsBatchedAndPoliciesRemembered(t *testing.T) {
 	}
 	if got := f.engine.taken[filepath.Join(f.root, "ledger")]; len(got) != 0 {
 		t.Fatalf("ledger took %v; *.txt is excluded now", got)
+	}
+}
+
+// The weekly re-check reads every due policy in one call, and paths set
+// together come due on different days.
+func TestPolicyRecheckBatched(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	f.runner.Run(ctx, "manual")
+	if f.engine.reads != 1 || f.engine.read != 3 {
+		t.Fatalf("first run: %d policy reads of %d paths", f.engine.reads, f.engine.read)
+	}
+	// Age every memo by 10 days: some paths are due, not necessarily all.
+	paths := []string{filepath.Join(f.root, "ledger"), filepath.Join(f.staging, "ledger"), filepath.Join(f.root, "keep")}
+	due := 0
+	for _, p := range paths {
+		var m policyMemo
+		f.store.Get(ctx, "policy:"+p, &m)
+		m.At = m.At.Add(-10 * 24 * time.Hour)
+		f.store.Put(ctx, "policy:"+p, m)
+		if 10*24*time.Hour >= recheckAfter(p) {
+			due++
+		}
+	}
+	f.runner.Run(ctx, "manual")
+	wantReads := 1
+	if due > 0 {
+		wantReads = 2
+	}
+	if f.engine.reads != wantReads || f.engine.read != 3+due || f.engine.configured != 3 {
+		t.Fatalf("re-check: %d reads of %d paths (%d due), %d set", f.engine.reads, f.engine.read, due, f.engine.configured)
+	}
+
+	spread := map[time.Duration]bool{}
+	for i := range 50 {
+		d := recheckAfter(fmt.Sprintf("/data/app%d", i))
+		if d < policyRecheck || d >= policyRecheck+7*24*time.Hour {
+			t.Fatal(d)
+		}
+		spread[d] = true
+	}
+	if len(spread) < 5 {
+		t.Fatalf("due dates aren't spread: %v", spread)
 	}
 }
