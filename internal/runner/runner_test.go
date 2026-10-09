@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -56,6 +57,20 @@ func (d *fakeDocker) set(name string, running bool) {
 	d.containers[name] = c
 }
 
+func (d *fakeDocker) List(context.Context) ([]docker.Summary, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []docker.Summary
+	for name, c := range d.containers {
+		state := "exited"
+		if c.Running {
+			state = "running"
+		}
+		out = append(out, docker.Summary{ID: name, Name: name, Image: c.Image, State: state})
+	}
+	return out, nil
+}
+
 func (d *fakeDocker) Stop(_ context.Context, name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -79,45 +94,61 @@ type fakeEngine struct {
 	taken   map[string][]string // path → files in its snapshot
 	fail    map[string]bool
 	n       int
+	// calls counts Snapshot calls, configured Configure calls.
+	calls, configured int
 }
 
 func (e *fakeEngine) Name() string { return "fake" }
 
-func (e *fakeEngine) Configure(_ context.Context, p string, ignores []string) error {
-	e.ignores[p] = ignores
+func (e *fakeEngine) Configure(_ context.Context, p string, pol engine.Policy) error {
+	e.ignores[p] = pol.Ignores
+	e.configured++
 	return nil
 }
 
-func (e *fakeEngine) Snapshot(_ context.Context, p, _ string) (engine.Snapshot, error) {
-	if e.fail[p] {
-		return engine.Snapshot{}, errors.New("upload failed")
-	}
-	var files []string
-	var size int64
-	err := filepath.WalkDir(p, func(f string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+func (e *fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[string]engine.Snapshot, error) {
+	e.calls++
+	got := map[string]engine.Snapshot{}
+	var failed []string
+	for _, p := range paths {
+		if e.fail[p] {
+			failed = append(failed, "upload error: "+p+": upload failed")
+			continue
 		}
-		rel, _ := filepath.Rel(p, f)
-		if rel == "." {
-			return nil
-		}
-		if config.Excluded(e.ignores[p], rel, d.IsDir()) {
-			if d.IsDir() {
-				return filepath.SkipDir
+		var files []string
+		var size int64
+		err := filepath.WalkDir(p, func(f string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(p, f)
+			if rel == "." {
+				return nil
+			}
+			if config.Excluded(e.ignores[p], rel, d.IsDir()) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !d.IsDir() {
+				info, _ := d.Info()
+				size += info.Size()
+				files = append(files, rel)
 			}
 			return nil
+		})
+		if err != nil {
+			return got, err
 		}
-		if !d.IsDir() {
-			info, _ := d.Info()
-			size += info.Size()
-			files = append(files, rel)
-		}
-		return nil
-	})
-	e.taken[p] = files
-	e.n++
-	return engine.Snapshot{ID: "snap" + string(rune('0'+e.n)), Path: p, Size: size, Files: int64(len(files))}, err
+		e.taken[p] = files
+		e.n++
+		got[p] = engine.Snapshot{ID: fmt.Sprintf("snap%d", e.n), Path: p, Size: size, Files: int64(len(files))}
+	}
+	if len(failed) > 0 {
+		return got, errors.New("exit status 1: " + strings.Join(failed, "\n"))
+	}
+	return got, nil
 }
 
 func (e *fakeEngine) Stats(context.Context) (engine.Stats, error) {
@@ -161,10 +192,7 @@ func newFixture(t *testing.T, yml string) *fixture {
 	os.MkdirAll(f.staging, 0o755)
 	os.WriteFile(filepath.Join(f.root, "keep", "keep.yml"), []byte("x"), 0o644)
 
-	cfgFile := filepath.Join(t.TempDir(), "keep.yml")
 	yml = strings.ReplaceAll(yml, "ROOT", f.root)
-	os.WriteFile(cfgFile, []byte(yml), 0o644)
-
 	db, err := store.Open(filepath.Join(t.TempDir(), "keep.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -184,9 +212,16 @@ func newFixture(t *testing.T, yml string) *fixture {
 	}))
 	t.Cleanup(hb.Close)
 	f.runner = New(Options{
-		Store: db, Docker: f.docker, ConfigFile: cfgFile, Heartbeat: hb.URL + "/ping/abc",
+		Store: db, Docker: f.docker, Heartbeat: hb.URL + "/ping/abc",
 		Engine: func(config.Config) engine.Engine { return f.engine },
 	})
+	cfg, err := config.Parse([]byte(yml))
+	if err == nil {
+		_, err = f.runner.SaveConfig(context.Background(), cfg)
+	}
+	if err != nil {
+		db.Put(context.Background(), "config", map[string]string{"every": "never"}) // a broken config
+	}
 	return f
 }
 
@@ -358,7 +393,7 @@ func TestBadConfig(t *testing.T) {
 	f := newFixture(t, "every: never")
 	id := f.runner.Run(context.Background(), "manual")
 	run, _ := f.store.GetRun(context.Background(), id)
-	if run.Status != "failed" || !strings.Contains(run.Summary, "keep.yml") {
+	if run.Status != "failed" || !strings.Contains(run.Summary, "settings") {
 		t.Fatalf("%+v", run)
 	}
 	o, _ := f.runner.Overview(context.Background())
@@ -449,8 +484,37 @@ func TestBytes(t *testing.T) {
 
 func TestDuration(t *testing.T) {
 	for d, want := range map[time.Duration]string{12 * time.Hour: "12h", 90 * time.Minute: "1h30m", 5 * time.Minute: "5m", 90 * time.Second: "1m30s"} {
-		if got := Duration(d); got != want {
+		if got := config.Duration(d).String(); got != want {
 			t.Errorf("%s: %s", d, got)
 		}
+	}
+}
+
+// Every engine call opens the repository (slow over rclone): one snapshot
+// call per run, and policies are only set when they change.
+func TestEngineCallsBatchedAndPoliciesRemembered(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	f.runner.Run(ctx, "manual")
+	if f.engine.calls != 1 || f.engine.configured != 3 { // ledger, its staging, keep
+		t.Fatalf("first run: %d snapshot calls, %d policies set", f.engine.calls, f.engine.configured)
+	}
+	f.runner.Run(ctx, "manual")
+	if f.engine.calls != 2 || f.engine.configured != 3 {
+		t.Fatalf("second run: %d snapshot calls, %d policies set", f.engine.calls, f.engine.configured)
+	}
+
+	// A new exclude changes ledger's policy only.
+	cfg, _ := f.runner.Config()
+	cfg.Sources = append(cfg.Sources, config.Source{Name: "ledger", Excludes: []string{"*.txt"}})
+	if _, err := f.runner.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Run(ctx, "manual")
+	if f.engine.configured != 4 {
+		t.Fatalf("after an edit: %d policies set", f.engine.configured)
+	}
+	if got := f.engine.taken[filepath.Join(f.root, "ledger")]; len(got) != 0 {
+		t.Fatalf("ledger took %v; *.txt is excluded now", got)
 	}
 }

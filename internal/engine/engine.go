@@ -17,13 +17,27 @@ type Engine interface {
 	// Name is the engine's name, for reports ("kopia").
 	Name() string
 	// Configure makes path a source Keep schedules (the engine's own
-	// schedule off) with exactly these ignore patterns: none inherited
-	// from parent folders or the engine's global settings.
-	Configure(ctx context.Context, path string, ignores []string) error
-	// Snapshot takes a snapshot of path. The engine applies its retention.
-	Snapshot(ctx context.Context, path, description string) (Snapshot, error)
+	// schedule off) with exactly this policy: ignores not inherited from
+	// parent folders or the engine's global settings.
+	Configure(ctx context.Context, path string, p Policy) error
+	// Snapshot takes a snapshot of each path, in one go: opening the
+	// repository is the slow part (tens of seconds over rclone). Paths that
+	// failed are missing from the map, and the error says why. The engine
+	// applies its retention.
+	Snapshot(ctx context.Context, paths []string, description string) (map[string]Snapshot, error)
 	// Stats reads the repository's size.
 	Stats(ctx context.Context) (Stats, error)
+}
+
+// Policy is how a path is snapshotted and how many snapshots are kept.
+type Policy struct {
+	Ignores   []string  `json:"ignores"`
+	Retention Retention `json:"retention"`
+}
+
+// Retention is the keep-* rules Kopia and restic share.
+type Retention struct {
+	Latest, Hourly, Daily, Weekly, Monthly, Annual int
 }
 
 type Snapshot struct {

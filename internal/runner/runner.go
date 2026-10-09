@@ -6,6 +6,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,7 +23,6 @@ import (
 	"github.com/audemed44/keep/internal/config"
 	"github.com/audemed44/keep/internal/docker"
 	"github.com/audemed44/keep/internal/engine"
-	"github.com/audemed44/keep/internal/prepare"
 	"github.com/audemed44/keep/internal/store"
 )
 
@@ -30,6 +30,7 @@ import (
 type Docker interface {
 	engine.Execer
 	Inspect(ctx context.Context, name string) (docker.Container, error)
+	List(ctx context.Context) ([]docker.Summary, error)
 	Stop(ctx context.Context, name string) error
 	Start(ctx context.Context, name string) error
 }
@@ -37,9 +38,8 @@ type Docker interface {
 type Options struct {
 	Store  *store.Store
 	Docker Docker
-	// ConfigFile is keep.yml, read again for every run and status, so
-	// edits apply without a restart.
-	ConfigFile string
+	// DefaultStaging is staging for a fresh config.
+	DefaultStaging string
 	// Engine builds the engine for a config; tests swap it.
 	Engine func(config.Config) engine.Engine
 	// Heartbeat is a healthchecks-style ping URL: /start, then the URL
@@ -75,9 +75,32 @@ func New(o Options) *Runner {
 	return &Runner{Options: o, client: &http.Client{Timeout: 15 * time.Second}, trigger: make(chan request, 1)}
 }
 
-// Config reads keep.yml.
+// Config reads the settings (what to back up, how, how often) from the
+// database; edits apply from the next run.
 func (r *Runner) Config() (config.Config, error) {
-	return config.Load(r.ConfigFile)
+	c := config.Config{Staging: r.DefaultStaging}
+	if err := r.Store.Get(context.Background(), "config", &c); err != nil {
+		return config.Config{}, err
+	}
+	err := c.Validate()
+	return c, err
+}
+
+// SaveConfig checks and stores the settings.
+func (r *Runner) SaveConfig(ctx context.Context, c config.Config) (config.Config, error) {
+	if err := c.Validate(); err != nil {
+		return c, err
+	}
+	if _, err := c.Resolve(os.ReadDir); err != nil {
+		return c, err
+	}
+	return c, r.Store.Put(ctx, "config", c)
+}
+
+// HasConfig reports whether settings were ever saved.
+func (r *Runner) HasConfig(ctx context.Context) bool {
+	var raw json.RawMessage
+	return r.Store.Get(ctx, "config", &raw) == nil && raw != nil
 }
 
 // ErrBusy means a run is already in progress.
@@ -220,182 +243,10 @@ func levelFor(status string) string {
 	return "info"
 }
 
-func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
-	cfg, err := r.Config()
-	if err != nil {
-		r.log(ctx, id, "error", "Reading %s: %v", r.ConfigFile, err)
-		return "failed", "keep.yml: " + err.Error()
-	}
-	sources, err := cfg.Resolve(os.ReadDir)
-	if err != nil {
-		r.log(ctx, id, "error", "Finding sources: %v", err)
-		return "failed", err.Error()
-	}
-	if len(sources) == 0 {
-		r.log(ctx, id, "error", "No sources: add roots or sources to keep.yml")
-		return "failed", "nothing to back up"
-	}
-	eng := r.Engine(cfg)
-	r.log(ctx, id, "info", "Backing up %d sources with %s", len(sources), eng.Name())
-	paths := r.pathCheck(ctx, cfg)
-
-	var failed, warned []string
-	var size int64
-	for _, s := range sources {
-		if ctx.Err() != nil {
-			failed = append(failed, s.Name)
-			continue
-		}
-		r.mu.Lock()
-		r.current = s.Name
-		r.mu.Unlock()
-		rs := r.backup(ctx, id, cfg, eng, s, paths)
-		size += rs.Size
-		switch rs.Status {
-		case "failed":
-			failed = append(failed, s.Name)
-		case "warn":
-			warned = append(warned, s.Name)
-		}
-	}
-	if st, err := eng.Stats(ctx); err != nil {
-		r.log(ctx, id, "warn", "Reading the repository size: %v", err)
-	} else if err := r.Store.Put(ctx, "repo", RepoInfo{Size: st.Size, At: time.Now()}); err != nil {
-		slog.Warn("saving the repository size", "err", err)
-	}
-
-	ok := len(sources) - len(failed) - len(warned)
-	summary = fmt.Sprintf("%d of %d sources backed up, %s", ok+len(warned), len(sources), Bytes(size))
-	switch {
-	case len(failed) > 0:
-		return "failed", summary + "; failed: " + strings.Join(failed, ", ")
-	case len(warned) > 0:
-		return "warn", summary + "; warnings: " + strings.Join(warned, ", ")
-	}
-	return "ok", summary
-}
-
 // RepoInfo is the repository size after the last run.
 type RepoInfo struct {
 	Size int64     `json:"size"`
 	At   time.Time `json:"at"`
-}
-
-// backup prepares and snapshots one source.
-func (r *Runner) backup(ctx context.Context, runID int64, cfg config.Config, eng engine.Engine, s config.Source, paths pathCheck) store.RunSource {
-	rs := store.RunSource{RunID: runID, Name: s.Name, Strategy: s.Strategy, Status: "running", Started: time.Now()}
-	_ = r.Store.SaveRunSource(ctx, rs)
-	var warns []string
-	fail := func(format string, args ...any) store.RunSource {
-		msg := fmt.Sprintf(format, args...)
-		r.log(ctx, runID, "error", "%s: %s", s.Name, msg)
-		rs.Status, rs.Message, rs.Finished = "failed", msg, time.Now()
-		_ = r.Store.SaveRunSource(context.WithoutCancel(ctx), rs)
-		return rs
-	}
-	warn := func(format string, args ...any) {
-		msg := fmt.Sprintf(format, args...)
-		r.log(ctx, runID, "warn", "%s: %s", s.Name, msg)
-		warns = append(warns, msg)
-	}
-
-	if s.Path != "" {
-		if err := paths.check(s.Path); err != nil {
-			return fail("%v", err)
-		}
-		if info, err := os.Stat(s.Path); err != nil || !info.IsDir() {
-			return fail("%s isn't a folder Keep can read", s.Path)
-		}
-	}
-	stage := path.Join(cfg.Staging, s.Name)
-	if err := os.RemoveAll(stage); err != nil {
-		return fail("clearing staging: %v", err)
-	}
-	defer os.RemoveAll(stage)
-
-	ignores := slices.Concat(cfg.Excludes, s.Excludes)
-	if s.Path != "" && within(cfg.Staging, s.Path) {
-		ignores = append(ignores, config.Literal(rel(s.Path, cfg.Staging)))
-	}
-
-	var restart []string // containers the stop strategy stopped
-	defer func() { r.start(context.WithoutCancel(ctx), runID, s.Name, restart) }()
-	switch s.Strategy {
-	case config.SQLite:
-		dbs, err := prepare.FindSQLite(s.Path, ignores, cfg.Staging)
-		if err != nil {
-			return fail("looking for databases: %v", err)
-		}
-		for _, db := range dbs {
-			err := prepare.CopySQLite(ctx, filepath.Join(s.Path, db), filepath.Join(stage, db))
-			if err != nil {
-				warn("%s couldn't be copied (%v); the live file is in the snapshot instead", db, err)
-				continue
-			}
-			rs.Databases++
-			for _, f := range prepare.LiveFiles(db) {
-				ignores = append(ignores, config.Literal(f))
-			}
-		}
-		if len(dbs) > 0 {
-			r.log(ctx, runID, "info", "%s: copied %d of %d SQLite databases", s.Name, rs.Databases, len(dbs))
-		}
-	case config.Postgres, config.MariaDB:
-		n, err := prepare.Dump(ctx, r.Docker, s, filepath.Join(stage, prepare.DumpName(s)))
-		if err != nil {
-			return fail("%v", err)
-		}
-		rs.Databases = 1
-		r.log(ctx, runID, "info", "%s: dumped %s from %s", s.Name, Bytes(n), s.Container)
-	case config.Stop:
-		names := splitList(s.Container)
-		var err error
-		restart, err = r.stop(ctx, runID, s.Name, names)
-		if err != nil {
-			return fail("stopping %s: %v", strings.Join(names, ", "), err)
-		}
-	}
-
-	snapshot := func(p string, ignores []string) bool {
-		if err := eng.Configure(ctx, p, ignores); err != nil {
-			fail("%v", err)
-			return false
-		}
-		snap, err := eng.Snapshot(ctx, p, fmt.Sprintf("Keep run %d: %s", runID, s.Name))
-		if err != nil {
-			fail("%v", err)
-			return false
-		}
-		rs.Size += snap.Size
-		rs.Files += snap.Files
-		rs.Snapshots = append(rs.Snapshots, snap.ID)
-		if snap.Errors > 0 {
-			warn("%d files in %s couldn't be read", snap.Errors, p)
-		}
-		return true
-	}
-	if s.Path != "" && !snapshot(s.Path, dedupe(ignores)) {
-		return rs
-	}
-	// The stop strategy's containers can start as soon as their files are in.
-	r.start(context.WithoutCancel(ctx), runID, s.Name, restart)
-	restart = nil
-	if staged, _ := hasFiles(stage); staged {
-		if err := paths.check(stage); err != nil {
-			return fail("staging: %v", err)
-		}
-		if !snapshot(stage, nil) {
-			return rs
-		}
-	}
-
-	rs.Status, rs.Finished = "ok", time.Now()
-	if len(warns) > 0 {
-		rs.Status, rs.Message = "warn", strings.Join(warns, "; ")
-	}
-	r.log(ctx, runID, "info", "%s: %s in %d files (%s)", s.Name, Bytes(rs.Size), rs.Files, rs.Finished.Sub(rs.Started).Round(time.Second))
-	_ = r.Store.SaveRunSource(context.WithoutCancel(ctx), rs)
-	return rs
 }
 
 // stop stops the running containers among names and returns them, to be
@@ -498,6 +349,9 @@ func hasFiles(dir string) (bool, error) {
 	}
 	return found, err
 }
+
+// Within reports whether p is dir or inside it.
+func Within(p, dir string) bool { return within(p, dir) }
 
 // within reports whether p is dir or inside it.
 func within(p, dir string) bool {
