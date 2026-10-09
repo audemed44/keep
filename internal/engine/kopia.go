@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -244,6 +245,21 @@ func (k *Kopia) Delete(ctx context.Context, ids []string) error {
 		return nil
 	}
 	_, err := k.run(ctx, append(append([]string{"snapshot", "delete"}, ids...), "--delete")...)
+	return err
+}
+
+// Restore restores in parallel: over rclone each file is a request to
+// Drive (about 5 s), so a one-at-a-time restore of a thousand files takes
+// over an hour. Owners are left to the caller (kopia runs as root).
+func (k *Kopia) Restore(ctx context.Context, id, subpath, target string) error {
+	src := id
+	if subpath = strings.Trim(subpath, "/"); subpath != "" {
+		src += "/" + subpath
+	}
+	_, err := k.run(ctx, "snapshot", "restore", src, target, "--parallel=32", "--skip-owners")
+	if err != nil && strings.Contains(err.Error(), "entry not found") {
+		return fmt.Errorf("%s: %w", subpath, ErrNotInSnapshot)
+	}
 	return err
 }
 

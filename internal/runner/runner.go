@@ -113,6 +113,7 @@ var ErrBusy = errors.New("Keep is busy with another job")
 type Job struct {
 	Kind    string
 	Trigger string // schedule, manual or foyer
+	Restore *RestoreSpec
 }
 
 // request asks the loop for a run; the loop answers its id on id.
@@ -172,6 +173,7 @@ func (r *Runner) Loop(ctx context.Context) {
 	if err := r.Store.AbandonRuns(ctx, time.Now()); err != nil {
 		slog.Error("marking interrupted runs", "err", err)
 	}
+	r.cleanRestores(ctx)
 	for {
 		next, kind := r.schedule(ctx)
 		r.mu.Lock()
@@ -240,6 +242,7 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 	if job.Kind == "" {
 		job.Kind = store.KindBackup
 	}
+	r.cleanRestores(ctx)
 	started := time.Now()
 	id, err := r.Store.StartRun(ctx, job.Kind, job.Trigger, started)
 	if req.id != nil {
@@ -264,6 +267,8 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 	switch job.Kind {
 	case store.KindVerify:
 		status, summary = r.verify(ctx, id)
+	case store.KindRestore:
+		status, summary = r.restore(ctx, id, job.Restore)
 	default:
 		status, summary = r.run(ctx, id)
 	}

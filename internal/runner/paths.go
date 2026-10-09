@@ -80,6 +80,15 @@ func (r *Runner) HostPaths(ctx context.Context) func(string) string {
 
 // hostPath maps p through the mount that covers it most closely.
 func hostPath(p string, mounts []docker.Mount) (string, bool) {
+	m, ok := mountFor(p, mounts)
+	if !ok {
+		return "", false
+	}
+	return path.Join(m.Source, strings.TrimPrefix(path.Clean(p), path.Clean(m.Destination))), true
+}
+
+// mountFor is the mount that covers p most closely.
+func mountFor(p string, mounts []docker.Mount) (docker.Mount, bool) {
 	best := -1
 	for i, m := range mounts {
 		if within(p, m.Destination) && (best < 0 || len(m.Destination) > len(mounts[best].Destination)) {
@@ -87,8 +96,18 @@ func hostPath(p string, mounts []docker.Mount) (string, bool) {
 		}
 	}
 	if best < 0 {
-		return "", false
+		return docker.Mount{}, false
 	}
-	m := mounts[best]
-	return path.Join(m.Source, strings.TrimPrefix(path.Clean(p), path.Clean(m.Destination))), true
+	return mounts[best], true
+}
+
+// writable checks p like check, and that the engine can write there.
+func (pc pathCheck) writable(p string) error {
+	if err := pc.check(p); err != nil {
+		return err
+	}
+	if m, _ := mountFor(p, pc.eng); !m.RW {
+		return fmt.Errorf("the engine's container can't write to %s: mount it there read-write", p)
+	}
+	return nil
 }

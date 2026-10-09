@@ -123,6 +123,13 @@ export function RunPage({ id }: { id: number }) {
               />
             </div>
             {run.summary && <p class="muted page-lede">{run.summary}</p>}
+            {run.kind === "restore" && run.status !== "running" && (
+              <p>
+                <a class="link" href="/restores">
+                  Open Restores
+                </a>
+              </p>
+            )}
           </>
         )}
       </header>

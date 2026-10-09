@@ -44,6 +44,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/runs/{id}", s.getRun)
 	api.HandleFunc("GET /api/runs/{id}/log", s.runLog)
 	api.HandleFunc("GET /api/sources/{name}/history", s.sourceHistory)
+	api.HandleFunc("GET /api/sources/{name}/points", s.restorePoints)
+	api.HandleFunc("GET /api/restores", s.listRestores)
+	api.HandleFunc("POST /api/restores", s.startRestore)
+	api.HandleFunc("DELETE /api/restores/{name}", s.deleteRestore)
+	api.HandleFunc("GET /api/restores/{name}/browse", s.browseRestore)
+	api.HandleFunc("GET /api/restores/{name}/file", s.downloadRestore)
 
 	api.HandleFunc("GET /api/foyer/widget", s.foyerWidget)
 	api.HandleFunc("POST /api/foyer/run", s.foyerRun)

@@ -30,6 +30,11 @@ describe("router", () => {
   it("parses routes", () => {
     expect(parseRoute("/")).toEqual({ page: "home" });
     expect(parseRoute("/runs")).toEqual({ page: "runs" });
+    expect(parseRoute("/restores")).toEqual({ page: "restores" });
+    expect(parseRoute("/restores/ledger-20261009-1200-5")).toEqual({
+      page: "restore",
+      name: "ledger-20261009-1200-5",
+    });
     expect(parseRoute("/runs/12")).toEqual({ page: "run", id: 12 });
     expect(parseRoute("/runs/x")).toEqual({ page: "runs" });
     expect(parseRoute("/sources/my%20app")).toEqual({ page: "source", name: "my app" });
