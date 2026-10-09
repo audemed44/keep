@@ -29,6 +29,5 @@ ENV KEEP_DATA_DIR=/data \
     GOMEMLIMIT=32MiB
 USER 1000:1000
 EXPOSE 8080
-VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s CMD ["keep", "healthcheck"]
 ENTRYPOINT ["keep"]
