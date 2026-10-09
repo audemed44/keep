@@ -310,8 +310,25 @@ func TestAfterRun(t *testing.T) {
 	if w.Stats[0].Tone != "bad" || w.Stats[1].Value != "3" || w.Stats[1].Unit != "/4" || w.Stats[2].Value != "5.0 MB" {
 		t.Fatalf("%+v", w.Stats)
 	}
-	// Problems first, after the run line.
-	if w.Items[1].Title != "lookout" || !strings.Contains(w.Items[1].Subtitle, "upload failed") {
+	// Then what isn't backed up, then problems first.
+	if w.Items[1].Title != "3 data folders aren't backed up" || w.Items[1].Subtitle != "immich-db, jellyfin, redis" {
+		t.Fatalf("%+v", w.Items)
+	}
+	if w.Items[2].Title != "lookout" || !strings.Contains(w.Items[2].Subtitle, "upload failed") {
+		t.Fatalf("%+v", w.Items)
+	}
+
+	// Ignoring them clears the line.
+	cfg, _ := h.runner.Config()
+	cfg.Ignored = []string{filepath.Join(h.base, "media"), "immich_pg", "redisdata"}
+	if _, err := h.runner.SaveConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if sg := decode[[]runner.Suggestion](t, do(h, "GET", "/api/suggestions", "", true)); len(sg) != 0 {
+		t.Fatalf("ignored ones are still suggested: %+v", sg)
+	}
+	w = decode[foyerWidget](t, do(h, "GET", "/api/foyer/widget", "", true))
+	if strings.Contains(w.Items[1].Title, "backed up") {
 		t.Fatalf("%+v", w.Items)
 	}
 

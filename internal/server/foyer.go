@@ -101,6 +101,20 @@ func (s *Server) foyerWidget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out.Items = append(out.Items, run)
+	if sg := s.Runner.Unprotected(r.Context()); len(sg) > 0 {
+		names := []string{}
+		for _, x := range sg {
+			if !slices.Contains(names, x.Container) {
+				names = append(names, x.Container)
+			}
+		}
+		what := "data folder isn't"
+		if len(sg) > 1 {
+			what = "data folders aren't"
+		}
+		out.Items = append(out.Items, foyerItem{Title: fmt.Sprintf("%d %s backed up", len(sg), what),
+			Subtitle: strings.Join(names, ", "), Caption: "Add or ignore", URL: "/"})
+	}
 	list := append([]runner.SourceStatus(nil), o.Sources...)
 	sort.SliceStable(list, func(i, j int) bool { return stateRank[list[i].State] < stateRank[list[j].State] })
 	for _, src := range list {

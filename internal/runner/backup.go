@@ -35,6 +35,9 @@ type job struct {
 	snaps []target // what to snapshot
 	warns []string
 	done  bool // failed already, or finished
+	// prepared is true once the source's before hook (if any) has run:
+	// its after hook runs then, however the snapshot goes.
+	prepared bool
 }
 
 // target is a path to snapshot and its policy.
@@ -108,6 +111,8 @@ func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
 		r.start(context.WithoutCancel(ctx), id, j.src.Name, stopped)
 	}
 
+	r.afterHooks(ctx, jobs)
+
 	var failed, warned []string
 	var size int64
 	for _, j := range jobs {
@@ -162,6 +167,14 @@ func (r *Runner) prepare(ctx context.Context, cfg config.Config, pc pathCheck, r
 		r.fail(ctx, j, "clearing staging: %v", err)
 		return
 	}
+
+	if s.Hooks.Before != "" {
+		if err := r.hook(ctx, j, "before", s.Hooks.Before); err != nil {
+			r.fail(ctx, j, "the before hook failed: %v", err)
+			return
+		}
+	}
+	j.prepared = true
 
 	ignores := slices.Concat(cfg.Excludes, s.Excludes)
 	if s.Path != "" {
@@ -264,6 +277,40 @@ func (r *Runner) snapshot(ctx context.Context, runID int64, eng engine.Engine, j
 		}
 		r.log(ctx, runID, "info", "%s: %s in %d files", j.src.Name, Bytes(j.rs.Size), j.rs.Files)
 		_ = r.Store.SaveRunSource(context.WithoutCancel(ctx), j.rs)
+	}
+}
+
+// hookTimeout bounds one hook command.
+const hookTimeout = 10 * time.Minute
+
+// hook runs a source's hook command in its container.
+func (r *Runner) hook(ctx context.Context, j *job, which, command string) error {
+	c := j.src.Hooks.Container
+	r.log(ctx, j.rs.RunID, "info", "%s: %s hook in %s: %s", j.src.Name, which, c, command)
+	hctx, cancel := context.WithTimeout(ctx, hookTimeout)
+	defer cancel()
+	return r.Docker.Exec(hctx, c, []string{"sh", "-c", command}, nil)
+}
+
+// afterHooks runs the after hooks of the sources that got past their
+// before hook. A failing one makes the source's result a warning.
+func (r *Runner) afterHooks(ctx context.Context, jobs []*job) {
+	for _, j := range jobs {
+		if !j.prepared || j.src.Hooks.After == "" {
+			continue
+		}
+		r.setCurrent(j.src.Name + ": after hook")
+		err := r.hook(context.WithoutCancel(ctx), j, "after", j.src.Hooks.After)
+		if err == nil {
+			continue
+		}
+		msg := fmt.Sprintf("the after hook failed: %v", err)
+		r.log(ctx, j.rs.RunID, "warn", "%s: %s", j.src.Name, msg)
+		if j.rs.Status == "ok" || j.rs.Status == "warn" {
+			j.rs.Status = "warn"
+			j.rs.Message = strings.TrimPrefix(j.rs.Message+"; "+msg, "; ")
+			_ = r.Store.SaveRunSource(context.WithoutCancel(ctx), j.rs)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/audemed44/keep/internal/config"
 )
@@ -189,6 +190,10 @@ func (r *Runner) Suggestions(ctx context.Context) ([]Suggestion, error) {
 			dumped[s.Volume] = true
 		}
 	}
+	ignored := map[string]bool{}
+	for _, p := range cfg.Ignored {
+		ignored[p] = true
+	}
 	skip := map[string]bool{cfg.Engine.Container: true}
 	if r.Self != "" {
 		if self, err := r.Docker.Inspect(ctx, r.Self); err == nil {
@@ -218,14 +223,14 @@ func (r *Runner) Suggestions(ctx context.Context) ([]Suggestion, error) {
 				if info, err := os.Stat(m.Source); err != nil || !info.IsDir() {
 					continue // a single file (a config), or gone
 				}
-				if cov := Cover(cfg, sources, m.Source); cov.Source != "" && !cov.Excluded {
+				if cov := Cover(cfg, sources, m.Source); (cov.Source != "" && !cov.Excluded) || ignored[m.Source] {
 					continue
 				}
 				sg.Kind, sg.Path = "folder", m.Source
 			case "volume":
 				// Anonymous volumes (an image's VOLUME line) are named by a
 				// hash; they're not data anyone chose to keep.
-				if seen["v:"+m.Name] || dumped[m.Name] || anonymous.MatchString(m.Name) {
+				if seen["v:"+m.Name] || dumped[m.Name] || ignored[m.Name] || anonymous.MatchString(m.Name) {
 					continue
 				}
 				sg.Kind, sg.Volume = "volume", m.Name
@@ -250,6 +255,36 @@ func (r *Runner) Suggestions(ctx context.Context) ([]Suggestion, error) {
 		return out[i].Container < out[j].Container
 	})
 	return out, nil
+}
+
+// suggestionsFor is how long the count on the Foyer card is reused:
+// finding suggestions inspects every container.
+const suggestionsFor = 5 * time.Minute
+
+// Unprotected is what the Foyer card shows: the suggestions, at most
+// suggestionsFor old.
+func (r *Runner) Unprotected(ctx context.Context) []Suggestion {
+	r.mu.Lock()
+	cached, at := r.suggested, r.suggestedAt
+	r.mu.Unlock()
+	if !at.IsZero() && time.Since(at) < suggestionsFor {
+		return cached
+	}
+	list, err := r.Suggestions(ctx)
+	if err != nil {
+		return cached
+	}
+	r.mu.Lock()
+	r.suggested, r.suggestedAt = list, time.Now()
+	r.mu.Unlock()
+	return list
+}
+
+// ForgetSuggestions drops the cached suggestions (after a settings change).
+func (r *Runner) ForgetSuggestions() {
+	r.mu.Lock()
+	r.suggestedAt = time.Time{}
+	r.mu.Unlock()
 }
 
 var anonymous = regexp.MustCompile(`^[0-9a-f]{64}$`)

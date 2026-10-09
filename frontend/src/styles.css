@@ -1073,3 +1073,18 @@ label.btn {
     flex-basis: 100%;
   }
 }
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.hooks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 14px 0 0;
+  margin: 0;
+}

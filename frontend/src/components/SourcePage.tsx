@@ -115,6 +115,28 @@ export function SourcePage({ name }: { name: string }) {
                 <span class="muted">none of its own</span>
               )}
             </dd>
+            <dt>Hooks</dt>
+            <dd>
+              {s.hooks?.before || s.hooks?.after ? (
+                <>
+                  in <code>{s.hooks.container}</code>
+                  {s.hooks.before && (
+                    <>
+                      {" "}
+                      · before: <code>{s.hooks.before}</code>
+                    </>
+                  )}
+                  {s.hooks.after && (
+                    <>
+                      {" "}
+                      · after: <code>{s.hooks.after}</code>
+                    </>
+                  )}
+                </>
+              ) : (
+                <span class="muted">none</span>
+              )}
+            </dd>
             <dt>From</dt>
             <dd>{s.discovered ? "A folder inside a watched folder" : "Added on its own"}</dd>
           </dl>
@@ -193,6 +215,11 @@ function EditSourceDialog(props: { s: SourceStatus; onClose: () => void; onSaved
   const [strategy, setStrategy] = useState(s.strategy);
   const [container, setContainer] = useState(s.container ?? "");
   const [excludes, setExcludes] = useState((s.excludes ?? []).join("\n"));
+  const [hooks, setHooks] = useState({
+    container: s.hooks?.container ?? "",
+    before: s.hooks?.before ?? "",
+    after: s.hooks?.after ?? "",
+  });
   const { busy, error, run } = useAction();
   const save = (e: Event) => {
     e.preventDefault();
@@ -207,6 +234,10 @@ function EditSourceDialog(props: { s: SourceStatus; onClose: () => void; onSaved
           strategy,
           container: container.trim() || undefined,
           excludes: lines(excludes),
+          hooks:
+            hooks.before.trim() || hooks.after.trim()
+              ? { container: hooks.container.trim(), before: hooks.before, after: hooks.after }
+              : undefined,
           skip: false,
         }),
       );
@@ -265,6 +296,34 @@ function EditSourceDialog(props: { s: SourceStatus; onClose: () => void; onSaved
             />
           </Field>
         )}
+        <fieldset class="hooks">
+          <legend class="field-label">Hooks</legend>
+          <p class="field-hint">
+            Run with sh -c in a container: before preparing the source (a failure skips its
+            snapshot), and after its snapshot (a failure is a warning).
+          </p>
+          <Field label="Container">
+            <input
+              class="input"
+              value={hooks.container}
+              onInput={(e) => setHooks({ ...hooks, container: e.currentTarget.value })}
+            />
+          </Field>
+          <Field label="Before">
+            <input
+              class="input mono"
+              value={hooks.before}
+              onInput={(e) => setHooks({ ...hooks, before: e.currentTarget.value })}
+            />
+          </Field>
+          <Field label="After">
+            <input
+              class="input mono"
+              value={hooks.after}
+              onInput={(e) => setHooks({ ...hooks, after: e.currentTarget.value })}
+            />
+          </Field>
+        </fieldset>
         {error && <div class="form-error">{error}</div>}
       </form>
     </Dialog>

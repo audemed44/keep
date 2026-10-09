@@ -56,6 +56,9 @@ type Config struct {
 	Retention Retention `yaml:"retention" json:"retention"`
 	// Verify is the repository check, a job of its own.
 	Verify Verify `yaml:"verify" json:"verify"`
+	// Ignored are container paths and volumes not to suggest backing up:
+	// left out on purpose.
+	Ignored []string `yaml:"ignored" json:"ignored"`
 	// Retire lists paths whose snapshots (taken before Keep, or of
 	// sources since removed) are deleted on the first verify on or after
 	// a date.
@@ -122,9 +125,20 @@ type Source struct {
 	// Command replaces the default dump command (run with sh -c in the
 	// container, writing the dump to stdout).
 	Command string `yaml:"command" json:"command,omitempty"`
-	Skip    bool   `yaml:"skip" json:"skip,omitempty"`
+	// Hooks are commands run around the source's snapshot.
+	Hooks Hooks `yaml:"hooks" json:"hooks,omitzero"`
+	Skip  bool  `yaml:"skip" json:"skip,omitempty"`
 	// Discovered is true for a folder found in a root.
 	Discovered bool `yaml:"-" json:"discovered,omitempty"`
+}
+
+// Hooks run with sh -c inside a container: Before ahead of the source's
+// preparation (a failure fails the source, and nothing is snapshotted),
+// After once its snapshot is done or has failed (a failure is a warning).
+type Hooks struct {
+	Container string `yaml:"container" json:"container,omitempty"`
+	Before    string `yaml:"before" json:"before,omitempty"`
+	After     string `yaml:"after" json:"after,omitempty"`
 }
 
 // Duration reads "12h" style durations.
@@ -269,6 +283,10 @@ func (c Config) validate() (Config, error) {
 	if h := c.Verify.Heartbeat; h != "" && !strings.HasPrefix(h, "https://") && !strings.HasPrefix(h, "http://") {
 		return Config{}, errors.New("verify: the heartbeat must be an http(s) URL")
 	}
+	c.Ignored = slices.Clone(c.Ignored)
+	if c.Ignored == nil {
+		c.Ignored = []string{}
+	}
 	c.Retire = slices.Clone(c.Retire)
 	if c.Retire == nil {
 		c.Retire = []Retire{}
@@ -333,6 +351,11 @@ func (c Config) validate() (Config, error) {
 				return Config{}, fmt.Errorf("%s: path must be absolute", s.Name)
 			}
 			s.Path = path.Clean(s.Path)
+		}
+		s.Hooks.Container = strings.TrimSpace(s.Hooks.Container)
+		s.Hooks.Before, s.Hooks.After = strings.TrimSpace(s.Hooks.Before), strings.TrimSpace(s.Hooks.After)
+		if (s.Hooks.Before != "" || s.Hooks.After != "") && s.Hooks.Container == "" {
+			return Config{}, fmt.Errorf("%s: hooks need the container to run them in", s.Name)
 		}
 		switch s.Strategy {
 		case Postgres, MariaDB:
@@ -419,6 +442,7 @@ func merge(base, o Source) Source {
 	base.Container = o.Container
 	base.Volume = o.Volume
 	base.Command = o.Command
+	base.Hooks = o.Hooks
 	base.Skip = o.Skip
 	return base
 }

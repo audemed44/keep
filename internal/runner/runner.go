@@ -64,6 +64,9 @@ type Runner struct {
 	current  string // what it's on
 	next     time.Time
 	nextKind string
+
+	suggested   []Suggestion // cached for the Foyer card
+	suggestedAt time.Time
 }
 
 func New(o Options) *Runner {
@@ -97,6 +100,7 @@ func (r *Runner) SaveConfig(ctx context.Context, c config.Config) (config.Config
 	if _, err := c.Resolve(os.ReadDir); err != nil {
 		return c, err
 	}
+	r.ForgetSuggestions()
 	return c, r.Store.Put(ctx, "config", c)
 }
 
