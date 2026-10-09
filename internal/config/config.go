@@ -1,4 +1,6 @@
-// Package config reads keep.yml: what to back up, how, and how often.
+// Package config is what to back up, how, and how often. It's edited in
+// the UI and stored in Keep's database; a keep.yml from older versions is
+// imported once.
 //
 // Sources come from two places. Every folder inside a root becomes a source
 // named after the folder, so a new app's data is backed up without
@@ -7,6 +9,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,18 +42,34 @@ type Config struct {
 	// Default: twice Every plus an hour.
 	StaleAfter Duration `yaml:"stale_after" json:"stale_after"`
 	Roots      []Root   `yaml:"roots" json:"roots"`
-	Sources    []Source `yaml:"sources" json:"-"`
+	Sources    []Source `yaml:"sources" json:"sources"`
 	// Excludes apply to every source, on top of its own.
 	Excludes []string `yaml:"excludes" json:"excludes"`
 	Engine   Engine   `yaml:"engine" json:"engine"`
 	// Staging is where dumps are written before their snapshot. The engine
 	// must see it at the same path.
 	Staging string `yaml:"staging" json:"staging"`
+	// Retention is how many snapshots the engine keeps per source.
+	Retention Retention `yaml:"retention" json:"retention"`
 }
+
+// Retention mirrors Kopia's and restic's keep-* rules. All zero means the
+// defaults.
+type Retention struct {
+	Latest  int `yaml:"latest" json:"latest"`
+	Hourly  int `yaml:"hourly" json:"hourly"`
+	Daily   int `yaml:"daily" json:"daily"`
+	Weekly  int `yaml:"weekly" json:"weekly"`
+	Monthly int `yaml:"monthly" json:"monthly"`
+	Annual  int `yaml:"annual" json:"annual"`
+}
+
+// DefaultRetention is what the homelab's Kopia used globally before Keep.
+var DefaultRetention = Retention{Latest: 10, Hourly: 48, Daily: 7, Weekly: 4, Monthly: 24, Annual: 3}
 
 type Root struct {
 	Path string   `yaml:"path" json:"path"`
-	Skip []string `yaml:"skip" json:"skip"` // folder names to leave out
+	Skip []string `yaml:"skip" json:"skip,omitempty"` // folder names to leave out
 }
 
 type Engine struct {
@@ -73,7 +92,7 @@ type Source struct {
 	Command string `yaml:"command" json:"command,omitempty"`
 	Skip    bool   `yaml:"skip" json:"skip,omitempty"`
 	// Discovered is true for a folder found in a root.
-	Discovered bool `yaml:"-" json:"discovered"`
+	Discovered bool `yaml:"-" json:"discovered,omitempty"`
 }
 
 // Duration reads "12h" style durations.
@@ -89,7 +108,36 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 }
 
 func (d Duration) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%q", time.Duration(d).String())), nil
+	return []byte(fmt.Sprintf("%q", d.String())), nil
+}
+
+// String is the duration without empty units: 12h, 1h30m, 25h.
+func (d Duration) String() string {
+	s := time.Duration(d).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*d = 0
+		return nil
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("%q isn't a duration like 12h or 30m", s)
+	}
+	*d = Duration(v)
+	return nil
 }
 
 func (d Duration) D() time.Duration { return time.Duration(d) }
@@ -105,7 +153,7 @@ func Load(file string) (Config, error) {
 	return Parse(raw)
 }
 
-// Parse checks a config and fills in defaults.
+// Parse reads a keep.yml, checks it and fills in defaults.
 func Parse(raw []byte) (Config, error) {
 	var c Config
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
@@ -113,6 +161,19 @@ func Parse(raw []byte) (Config, error) {
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) { // empty file: all defaults
 		return Config{}, err
 	}
+	return c, c.Validate()
+}
+
+// Validate checks a config and fills in defaults.
+func (cp *Config) Validate() error {
+	c, err := cp.validate()
+	if err == nil {
+		*cp = c
+	}
+	return err
+}
+
+func (c Config) validate() (Config, error) {
 	if c.Every == 0 {
 		c.Every = Duration(12 * time.Hour)
 	}
@@ -138,11 +199,39 @@ func Parse(raw []byte) (Config, error) {
 		return Config{}, errors.New("staging: must be an absolute path")
 	}
 	c.Staging = path.Clean(c.Staging)
+	if c.Retention == (Retention{}) {
+		c.Retention = DefaultRetention
+	}
+	r := c.Retention
+	for _, n := range []int{r.Latest, r.Hourly, r.Daily, r.Weekly, r.Monthly, r.Annual} {
+		if n < 0 || n > 10000 {
+			return Config{}, errors.New("retention: counts must be between 0 and 10000")
+		}
+	}
+	if r.Latest == 0 {
+		return Config{}, errors.New("retention: keep at least the latest snapshot")
+	}
+	c.Roots = slices.Clone(c.Roots)
+	c.Sources = slices.Clone(c.Sources)
+	if c.Roots == nil {
+		c.Roots = []Root{}
+	}
+	if c.Sources == nil {
+		c.Sources = []Source{}
+	}
+	if c.Excludes == nil {
+		c.Excludes = []string{}
+	}
+	roots := map[string]bool{}
 	for i, r := range c.Roots {
 		if !path.IsAbs(r.Path) {
 			return Config{}, fmt.Errorf("roots[%d]: path must be absolute", i)
 		}
 		c.Roots[i].Path = path.Clean(r.Path)
+		if roots[c.Roots[i].Path] {
+			return Config{}, fmt.Errorf("the folder %s is watched twice", c.Roots[i].Path)
+		}
+		roots[c.Roots[i].Path] = true
 	}
 	for _, e := range c.Excludes {
 		if err := CheckExclude(e); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/audemed44/keep/internal/config"
@@ -40,15 +39,15 @@ type Overview struct {
 	State
 	LastRun *store.Run `json:"last_run,omitempty"`
 	Repo    *RepoInfo  `json:"repo,omitempty"`
-	// ConfigError is set when keep.yml can't be read or resolved.
+	// ConfigError is set when the settings can't be read or resolved
+	// (a folder went missing).
 	ConfigError string `json:"config_error,omitempty"`
-	ConfigFile  string `json:"config_file"`
 }
 
 // Overview is every source with its state, plus the schedule and the
 // last run.
 func (r *Runner) Overview(ctx context.Context) (Overview, error) {
-	out := Overview{Sources: []SourceStatus{}, State: r.State(), ConfigFile: r.ConfigFile}
+	out := Overview{Sources: []SourceStatus{}, State: r.State()}
 	if last, ok, err := r.Store.LastRun(ctx); err != nil {
 		return out, err
 	} else if ok {
@@ -71,7 +70,7 @@ func (r *Runner) Overview(ctx context.Context) (Overview, error) {
 		out.ConfigError = err.Error()
 		return out, nil
 	}
-	out.Engine, out.Every, out.Stale = cfg.Engine.Type, Duration(cfg.Every.D()), Duration(cfg.StaleAfter.D())
+	out.Engine, out.Every, out.Stale = cfg.Engine.Type, cfg.Every.String(), cfg.StaleAfter.String()
 	sources, err := cfg.Resolve(os.ReadDir)
 	if err != nil {
 		out.ConfigError = err.Error()
@@ -106,16 +105,4 @@ func state(h store.SourceHistory, running bool, now time.Time, staleAfter time.D
 		return StateErrors
 	}
 	return StateOK
-}
-
-// Duration is a duration without empty units: 12h, 1h30m, 25h.
-func Duration(d time.Duration) string {
-	s := d.String()
-	if strings.HasSuffix(s, "m0s") {
-		s = strings.TrimSuffix(s, "0s")
-	}
-	if strings.HasSuffix(s, "h0m") {
-		s = strings.TrimSuffix(s, "0m")
-	}
-	return s
 }

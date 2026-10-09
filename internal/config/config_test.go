@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +22,27 @@ func TestParseDefaults(t *testing.T) {
 	}
 }
 
-func TestExampleParses(t *testing.T) {
-	if _, err := Parse([]byte(Example)); err != nil {
+func TestJSONRoundTrip(t *testing.T) {
+	c, err := Parse([]byte("every: 6h\nroots: [{path: /data}]\nsources: [{name: romm, excludes: [/library]}]"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(c)
+	var back Config
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if err := back.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if back.Every.D() != 6*time.Hour || len(back.Sources) != 1 || back.Sources[0].Excludes[0] != "/library" ||
+		back.Retention != DefaultRetention || back.Roots[0].Path != "/data" {
+		t.Fatalf("%+v", back)
+	}
+	back.Retention.Latest = 0
+	back.Retention.Daily = 3
+	if err := back.Validate(); err == nil {
+		t.Fatal("retention without the latest snapshot passed")
 	}
 }
 

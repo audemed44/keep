@@ -101,6 +101,7 @@ type Mount struct {
 
 type Container struct {
 	Name    string
+	Image   string
 	Running bool
 	Mounts  []Mount
 }
@@ -109,13 +110,44 @@ type Container struct {
 func (c *Client) Inspect(ctx context.Context, name string) (Container, error) {
 	var raw struct {
 		Name   string
+		Config struct{ Image string }
 		State  struct{ Running bool }
 		Mounts []Mount
 	}
 	if err := c.call(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", nil, &raw); err != nil {
 		return Container{}, err
 	}
-	return Container{Name: strings.TrimPrefix(raw.Name, "/"), Running: raw.State.Running, Mounts: raw.Mounts}, nil
+	return Container{Name: strings.TrimPrefix(raw.Name, "/"), Image: raw.Config.Image, Running: raw.State.Running, Mounts: raw.Mounts}, nil
+}
+
+// Summary is a container in the list.
+type Summary struct {
+	ID    string
+	Name  string
+	Image string
+	State string // running, exited, …
+}
+
+// List lists every container, running or not.
+func (c *Client) List(ctx context.Context) ([]Summary, error) {
+	var raw []struct {
+		Id    string
+		Names []string
+		Image string
+		State string
+	}
+	if err := c.call(ctx, http.MethodGet, "/containers/json?all=1", nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]Summary, 0, len(raw))
+	for _, r := range raw {
+		name := r.Id
+		if len(r.Names) > 0 {
+			name = strings.TrimPrefix(r.Names[0], "/")
+		}
+		out = append(out, Summary{ID: r.Id, Name: name, Image: r.Image, State: r.State})
+	}
+	return out, nil
 }
 
 func (c *Client) Stop(ctx context.Context, name string) error {

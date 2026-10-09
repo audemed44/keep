@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/audemed44/keep/internal/runner"
@@ -16,16 +15,6 @@ func (s *Server) getOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, o)
-}
-
-// getConfig shows keep.yml as it is on disk; it's edited there.
-func (s *Server) getConfig(w http.ResponseWriter, _ *http.Request) {
-	raw, err := os.ReadFile(s.Runner.ConfigFile)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "can't read "+s.Runner.ConfigFile+": "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"file": s.Runner.ConfigFile, "text": string(raw)})
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
