@@ -140,3 +140,17 @@ func TestExcluded(t *testing.T) {
 		t.Fatal("Literal matches like a glob")
 	}
 }
+
+func TestRetire(t *testing.T) {
+	if _, err := Parse([]byte("retire: [{path: /data/x, after: 9 Jan}]")); err == nil {
+		t.Fatal("a bad date passed")
+	}
+	if _, err := Parse([]byte("retire: [{path: data/x, after: 2027-01-09}]")); err == nil {
+		t.Fatal("a relative path passed")
+	}
+	r := Retire{Path: "/x", After: "2027-01-09"}
+	day := time.Date(2027, 1, 9, 0, 30, 0, 0, time.Local)
+	if r.Due(day.Add(-time.Hour)) || !r.Due(day) {
+		t.Fatal("due from the start of the day")
+	}
+}

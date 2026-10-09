@@ -2,6 +2,7 @@ import type {
   Config,
   Listing,
   LogLine,
+  OtherSource,
   Overview,
   RestoreEntry,
   RestoreInfo,
@@ -74,6 +75,7 @@ export const api = {
     request<{ points: RestorePoint[]; listed: string }>(
       `/api/sources/${encodeURIComponent(name)}/points`,
     ),
+  repository: () => request<{ listed: string; others: OtherSource[] }>("/api/repository"),
   restores: () => request<{ restores: RestoreInfo[]; keep_days: number }>("/api/restores"),
   startRestore: (spec: RestoreSpec) => request<{ id: number }>("/api/restores", json("POST", spec)),
   deleteRestore: (name: string) =>
