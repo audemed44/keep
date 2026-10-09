@@ -765,6 +765,7 @@ a.note:hover {
 }
 .list-main {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -1087,4 +1088,21 @@ label.btn {
   border-top: 1px solid var(--line);
   padding: 14px 0 0;
   margin: 0;
+}
+/* Four pages don't fit beside the brand on a phone: the nav gets a row. */
+@media (max-width: 520px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topnav {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 6px;
+  }
+  .topnav a {
+    padding: 6px 2px;
+  }
 }
