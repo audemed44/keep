@@ -54,25 +54,29 @@ services:
     group_add: ["988"] # the docker group's id: getent group docker
     environment:
       - KEEP_TOKEN=${KEEP_TOKEN} # openssl rand -hex 32
-      - KEEP_DATA_DIR=/data/keep # keep.db, keep.yml and staging
+      - KEEP_DATA_DIR=/home/me/stack/keep # keep.db and staging
       - KEEP_HEARTBEAT_URL=${KEEP_HEARTBEAT_URL}
     volumes:
-      - ./:/data # the stack folder, as Kopia sees it too
+      # The same host paths in Keep and the engine's container.
+      - /home/me:/home/me
+      - /mnt/hdd:/mnt/hdd
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8091:8080"
     mem_limit: 64m
 ```
 
-The stack folder is mounted read-write because SQLite has to touch a WAL
-database's `-shm` file even to read it. Keep writes nothing else outside its
-own folder. See [docker-compose.example.yml](docker-compose.example.yml).
+Mounting your data folders at their real paths in both containers means
+the paths in Keep's UI are host paths, and adding a folder anywhere under
+them never needs a compose change. They're read-write for Keep because
+SQLite has to touch a WAL database's `-shm` file even to read it; Keep
+writes nothing outside its own folder. See [docker-compose.example.yml](docker-compose.example.yml).
 
 | Variable | Default | |
 |---|---|---|
 | `KEEP_TOKEN` | (required) | What you sign in with; also Foyer's widget key |
-| `KEEP_DATA_DIR` | `/data` | Where `keep.db` (and by default `keep.yml`) live |
-| `KEEP_CONFIG` | `$KEEP_DATA_DIR/keep.yml` | The config file |
+| `KEEP_DATA_DIR` | `/data` | Where `keep.db` and staging live |
+| `KEEP_CONFIG` | `$KEEP_DATA_DIR/keep.yml` | A version 1 config to import once |
 | `KEEP_HEARTBEAT_URL` | | A Lookout or healthchecks.io ping URL |
 | `KEEP_DOCKER_SOCKET` | `/var/run/docker.sock` | |
 | `KEEP_CONTAINER` | the hostname | Keep's own container, to find host paths |
@@ -80,30 +84,42 @@ own folder. See [docker-compose.example.yml](docker-compose.example.yml).
 | `HOMEPAGE_URL` | | Foyer's address, linked from the header |
 | `KEEP_DEBUG` | | Set to log debug messages |
 
-## keep.yml
+## Choosing what to back up
 
-Written with comments on first start, and read again for every run, so
-edits apply without a restart.
+Everything is set in the UI and kept in Keep's database:
 
-```yaml
-every: 12h
-engine: {type: kopia, container: kopia}
-staging: /data/keep/staging
-roots:            # every folder in a root is a source named after it
-  - path: /data
-    skip: [scripts]
-excludes: ["*.sync-conflict-*"]
-sources:          # extra sources, or changes to found folders (same name)
-  - {name: romm, excludes: [/library]}
-  - {name: docvault, path: /docvault}
-  - {name: paperless-db, strategy: postgres, container: paperless-db, volume: paperless_pgdata}
-```
+- **Add** on the Sources page opens a folder picker over the folders Keep
+  can see (its bind mounts). A folder becomes one source, or a **watched
+  folder**: every folder inside it is a source named after it, including
+  ones added later.
+- **Not backed up** lists what containers mount that no source covers,
+  read from the Docker socket, each with an Add button. Database containers
+  (Postgres, MariaDB) get a dump source; other Docker volumes are listed so
+  you know they aren't covered.
+- Each source's page has **Edit** (strategy, containers to stop, what to
+  leave out) and **Stop backing up**. For a folder in a watched folder that
+  means skipping it; the snapshots stay in the repository.
+- **Settings**: schedule, how many snapshots to keep (set on every path in
+  Kopia, so retention lives in Keep), patterns left out everywhere, the
+  engine's container and staging.
 
 Excludes use the part of gitignore syntax Kopia and restic read the same
 way: `/x` from the top of the source, `name` at any depth, `dir/` for
 folders only. `**` and `!` aren't supported. A source's excludes replace
 Kopia's own ignore rules for that path, including any inherited from a
 parent folder's policy.
+
+A `keep.yml` from version 1 is imported once on start and renamed to
+`keep.yml.imported`.
+
+## Speed
+
+Every Kopia command opens the repository, which takes 20–50 s over rclone
+to Google Drive. So a run prepares every source first, then takes all the
+snapshots with one `kopia snapshot create`, and sets a path's policy only
+when it changed (Keep remembers what it set, and checks again weekly). The
+repository size comes from `kopia content stats`, which reads the local
+index cache. A run is two Kopia commands plus the upload.
 
 ## Foyer
 

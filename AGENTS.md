@@ -11,13 +11,15 @@ has the backup engine (Kopia, via `docker exec`) snapshot it, records the
 run and pings a Lookout heartbeat. A Go server (`cmd/keep`, `internal/`)
 serves a JSON API and the Preact + TypeScript frontend (`frontend/`), built
 into `web/dist` and embedded in the binary. State lives in SQLite at
-`$KEEP_DATA_DIR/keep.db` (`internal/store`); what to back up is in
-`keep.yml`.
+`$KEEP_DATA_DIR/keep.db` (`internal/store`), including the settings (what
+to back up, edited in the UI; a v1 `keep.yml` is imported once).
 
-- `internal/config`: keep.yml, folder discovery in roots, exclude patterns.
-- `internal/runner`: the schedule, one run at a time, per-source
-  prepare → snapshot → record, the path check between Keep's and the
-  engine's mounts, the overview (source states).
+- `internal/config`: the settings (validation, keep.yml import), folder
+  discovery in roots, exclude patterns.
+- `internal/runner`: the schedule, one run at a time (`backup.go`: prepare
+  every source → set changed policies → one batched snapshot → record),
+  the path check between Keep's and the engine's mounts, the overview,
+  folder browsing and suggestions from container mounts (`discover.go`).
 - `internal/prepare`: SQLite discovery and copies, database dumps.
 - `internal/engine`: the `Engine` interface and Kopia. Nothing outside this
   package knows how Kopia is called (restic comes later).
@@ -45,6 +47,8 @@ into `web/dist` and embedded in the binary. State lives in SQLite at
   runner checks it. Kopia applies a parent folder's ignore rules to
   snapshots inside it unless the path has its own list, so `Configure`
   always sets one.
+- **Engine calls are slow** (each opens the repository: 20–50 s over
+  rclone). Batch them; never add a per-source engine call to a run.
 - Tests never touch a real repository: use the fake engine/docker in
   `runner_test.go`, or a throwaway `kopia/kopia` container with a
   filesystem repository.
