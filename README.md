@@ -3,10 +3,10 @@
 Homelab backup orchestrator: consistent database dumps, Kopia snapshots, Lookout heartbeats.
 
 Keep decides **when** and **how** the homelab is backed up. A proven engine
-([Kopia](https://kopia.io) now, restic later) does the storage: chunking,
-dedup, encryption, retention and the upload. Keep never touches any of
-that. It makes each backup consistent, runs it, reports on it, and keeps
-the history.
+([Kopia](https://kopia.io)) does the storage: chunking, dedup, encryption,
+retention and the upload. Keep never touches any of that. It makes each
+backup consistent, runs it, reports on it, keeps the history, checks the
+repository every week, and restores into a folder of its own.
 
 ![Sources](docs/images/overview-desktop.png)
 
@@ -28,6 +28,11 @@ Every 12 hours (or on **Run now**, here or on Foyer's card), for each source:
    - `stop`: stops the containers, snapshots, and starts again only those
      it stopped.
    - `files`: nothing to prepare.
+
+   A source's **before hook** (a command run with `sh -c` in a container you
+   name) runs first; if it fails, the source fails and isn't snapshotted.
+   Its **after hook** runs once the snapshot is done or has failed; if it
+   fails, the source ends with a warning.
 2. **Snapshot** the folder and the staged copies through the engine. Keep
    turns the engine's own schedule off for these paths and sets their
    excludes.
@@ -43,7 +48,16 @@ Keep tells the engine "snapshot `/data/ledger`", and the engine reads its own
 `/data/ledger`. So Keep and the engine's container must see every source,
 and the staging folder, **at the same paths**. Keep checks this through
 both containers' mounts before each snapshot and fails the source loudly
-if they differ.
+if they differ. The restores folder (next to staging, `$KEEP_DATA_DIR/restores`
+by default) must be there too, and **writable** for the engine, which
+writes the restored files. The data can stay read-only for it:
+
+```yaml
+  kopia:
+    volumes:
+      - /home/me:/home/me:ro
+      - /home/me/stack/keep/restores:/home/me/stack/keep/restores
+```
 
 ```yaml
 services:
@@ -96,12 +110,14 @@ Everything is set in the UI and kept in Keep's database:
   read from the Docker socket, each with an Add button. Database containers
   (Postgres, MariaDB) get a dump source; other Docker volumes are listed so
   you know they aren't covered.
+- A suggestion left out on purpose can be **ignored**; Settings lists the
+  ignored ones. Foyer's card says how many data folders aren't backed up.
 - Each source's page has **Edit** (strategy, containers to stop, what to
-  leave out) and **Stop backing up**. For a folder in a watched folder that
+  leave out, hooks), **Restore** and **Stop backing up**. For a folder in a watched folder that
   means skipping it; the snapshots stay in the repository.
 - **Settings**: schedule, how many snapshots to keep (set on every path in
   Kopia, so retention lives in Keep), patterns left out everywhere, the
-  engine's container and staging.
+  verify, old snapshots, the engine's container, staging and restores.
 
 Excludes use the part of gitignore syntax Kopia and restic read the same
 way: `/x` from the top of the source, `name` at any depth, `dir/` for
@@ -117,9 +133,32 @@ A `keep.yml` from version 1 is imported once on start and renamed to
 Every Kopia command opens the repository, which takes 20–50 s over rclone
 to Google Drive. So a run prepares every source first, then takes all the
 snapshots with one `kopia snapshot create`, and sets a path's policy only
-when it changed (Keep remembers what it set, and checks again weekly). The
-repository size comes from `kopia content stats`, which reads the local
-index cache. A run is two Kopia commands plus the upload.
+when it changed. Keep remembers what it set and reads it back once a week
+or so: each path comes due 7–13 days after it was set (from a hash of the
+path, so they don't all come due together), and the due ones are read with
+one `kopia policy show`. The repository size comes from `kopia content
+stats`, which reads the local index cache. A run is two Kopia commands plus
+the upload.
+
+Restores are slow in another way: each file is its own request to Drive
+(about 5 s), so Keep restores 32 files at a time.
+
+## Verify
+
+Once a week (**Verify now** in Settings), Keep runs `kopia snapshot verify`,
+which checks every snapshot's structure and reads a share of the files back
+(5% by default). Every problem it finds goes in the log and fails the job.
+It's a job of its own, with its own heartbeat (set in Settings), so a failing
+check doesn't look like a failing backup. The verify also refreshes Keep's
+copy of the snapshot list, which restores and old snapshots read.
+
+## Old snapshots
+
+Snapshots of folders Keep doesn't back up now (from before Keep, or of a
+source since removed) never expire: nothing snapshots those paths any more.
+Settings lists them with a **Delete after** date; the first verify on or
+after it deletes all of that path's snapshots. Each one's newest snapshot
+can be restored from there too.
 
 ## Foyer
 
@@ -140,17 +179,24 @@ source as a host path or Docker volume, with its state.
 
 ## Restoring
 
-Restores go through the engine for now: Keep's sources are ordinary Kopia
-snapshots (`kopia snapshot list /data/ledger`). A SQLite source's databases
-are in the snapshot of `<staging>/<source>`, at the same relative paths, and
-a database source's dump is `<staging>/<source>/<source>.sql`.
+**Restore** on a source's page: pick one of its backups, then everything or
+one file or folder in it. Keep writes it to a folder of its own,
+`restores/<source>-<date>-<id>`, laid out like the source, with the
+database copies back where the live databases were. Nothing is ever
+restored over an app's files; moving things back is up to you. The
+**Restores** page browses them and downloads single files. Restores are
+deleted after 7 days.
 
-## Later: restic
+Without Keep, the snapshots are ordinary Kopia snapshots (`kopia snapshot
+list /data/ledger`). A SQLite source's databases are in the snapshot of
+`<staging>/<source>`, at the same relative paths, and a database source's
+dump is `<staging>/<source>/<source>.sql`.
 
-The engine sits behind one interface (`internal/engine`), so restic can
-replace Kopia: `restic backup --json`, `restic forget --prune` with the same
-retention, `restic stats`. The plan: run both for about four weeks, check
-restores, then switch and keep the Kopia repository read-only for a while.
+## Engine
+
+The engine sits behind one interface (`internal/engine`). Kopia is the only
+one; restic was considered and is on hold while Kopia's verifies come back
+clean.
 
 ## Development
 
