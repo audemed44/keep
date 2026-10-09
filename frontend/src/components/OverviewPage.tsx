@@ -42,6 +42,7 @@ export function OverviewPage() {
           />
           <Figure value={o?.repo ? bytes(o.repo.size) : "—"} label="Repository" />
           <VerifyFigure o={o} />
+          {o?.local && <LocalFigure o={o} />}
           <Figure
             value={o?.running ? "Now" : o?.next ? until(o.next) : "—"}
             label={
@@ -220,6 +221,20 @@ function VerifyFigure({ o }: { o: Overview | null }) {
         title={v.summary}
       />
     </a>
+  );
+}
+
+/** The local repository after the last run. */
+function LocalFigure({ o }: { o: Overview }) {
+  const l = o.local_info;
+  if (!l) return <Figure value="—" label="Local copy" title={o.local} />;
+  return (
+    <Figure
+      value={bytes(l.size)}
+      label={`Local copy · ${l.ok}/${l.total}`}
+      tone={l.ok < l.total ? "warn" : ""}
+      title={`${o.local}, as of ${ago(l.at)}`}
+    />
   );
 }
 

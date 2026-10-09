@@ -157,6 +157,9 @@ export function RunPage({ id }: { id: number }) {
                         .filter(Boolean)
                         .join(" · ")}
                   </span>
+                  {s.local_error && s.local_error !== "not prepared" && (
+                    <span class="list-sub tone-warn">Local copy: {s.local_error}</span>
+                  )}
                 </a>
               </div>
             ))}

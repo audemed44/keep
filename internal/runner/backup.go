@@ -38,6 +38,10 @@ type job struct {
 	// prepared is true once the source's before hook (if any) has run:
 	// its after hook runs then, however the snapshot goes.
 	prepared bool
+	// ready is true once it's prepared and has targets: the local
+	// repository snapshots it then, whatever happens in the main one.
+	ready     bool
+	localDone bool // in the local repository: failed, or finished
 }
 
 // target is a path to snapshot and its policy.
@@ -86,6 +90,7 @@ func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
 		if j.done {
 			continue
 		}
+		j.ready = true
 		if j.src.Strategy == config.Stop {
 			stops = append(stops, j)
 		} else {
@@ -93,9 +98,29 @@ func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
 		}
 	}
 
-	// 2. Policies, 3. one snapshot for the batch.
+	// The local repository, when there's one: a failure there never fails
+	// a source, it's recorded next to it.
+	var loc engine.Local
+	if cfg.Local.Path != "" {
+		r.setCurrent("the local repository")
+		var err error
+		if loc, err = r.openLocal(ctx, id, cfg, pc); err != nil {
+			r.log(ctx, id, "warn", "Local copy: %v", err)
+			for _, j := range jobs {
+				if j.ready {
+					r.localFail(ctx, j, "%v", err)
+				}
+			}
+		}
+	}
+
+	// 2. Policies, 3. one snapshot for the batch, in each repository.
 	r.setCurrent(fmt.Sprintf("%d sources", len(batch)))
 	r.snapshot(ctx, id, eng, batch)
+	if loc != nil {
+		r.setCurrent(fmt.Sprintf("%d sources, local copy", len(batch)))
+		r.localSnapshot(ctx, id, loc, batch)
+	}
 
 	// The stop strategy: one source at a time.
 	for _, j := range stops {
@@ -108,6 +133,9 @@ func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
 			continue
 		}
 		r.snapshot(ctx, id, eng, []*job{j})
+		if loc != nil {
+			r.localSnapshot(ctx, id, loc, []*job{j})
+		}
 		r.start(context.WithoutCancel(ctx), id, j.src.Name, stopped)
 	}
 
@@ -135,13 +163,27 @@ func (r *Runner) run(ctx context.Context, id int64) (status, summary string) {
 
 	ok := len(sources) - len(failed) - len(warned)
 	summary = fmt.Sprintf("%d of %d sources backed up, %s", ok+len(warned), len(sources), Bytes(size))
+	var localMissing []string
+	if cfg.Local.Path != "" {
+		localMissing = r.finishLocal(ctx, id, cfg, loc, jobs)
+	}
 	switch {
 	case len(failed) > 0:
-		return "failed", summary + "; failed: " + strings.Join(failed, ", ")
+		summary += "; failed: " + strings.Join(failed, ", ")
+		status = "failed"
 	case len(warned) > 0:
-		return "warn", summary + "; warnings: " + strings.Join(warned, ", ")
+		summary += "; warnings: " + strings.Join(warned, ", ")
+		status = "warn"
+	default:
+		status = "ok"
 	}
-	return "ok", summary
+	if len(localMissing) > 0 {
+		summary += "; not in the local copy: " + strings.Join(localMissing, ", ")
+		if status == "ok" {
+			status = "warn"
+		}
+	}
+	return status, summary
 }
 
 func (r *Runner) setCurrent(what string) {
@@ -232,7 +274,8 @@ func (r *Runner) prepare(ctx context.Context, cfg config.Config, pc pathCheck, r
 func (r *Runner) snapshot(ctx context.Context, runID int64, eng engine.Engine, jobs []*job) {
 	var paths []string
 	owner := map[string]*job{}
-	r.configure(ctx, eng, jobs)
+	r.configure(ctx, eng, "policy:", jobs, func(j *job) bool { return j.done },
+		func(j *job, msg string) { r.fail(ctx, j, "%s", msg) })
 	for _, j := range jobs {
 		if j.done {
 			continue
@@ -348,10 +391,13 @@ type policyMemo struct {
 	At   time.Time `json:"at"`
 }
 
-// configure sets the policies of the jobs' targets, skipping those Keep
-// set the same way recently. The rest are read in one engine call and set
-// one by one where they differ: every call opens the repository.
-func (r *Runner) configure(ctx context.Context, eng engine.Engine, jobs []*job) {
+// configure sets the policies of the jobs' targets in a repository,
+// skipping those Keep set the same way recently (remembered under memo +
+// path). The rest are read in one engine call and set one by one where
+// they differ: every call opens the repository. skip leaves a job out,
+// and fail records a job's failure.
+func (r *Runner) configure(ctx context.Context, eng engine.Engine, memo string, jobs []*job,
+	skip func(*job) bool, fail func(*job, string)) {
 	type due struct {
 		t    target
 		j    *job
@@ -359,15 +405,15 @@ func (r *Runner) configure(ctx context.Context, eng engine.Engine, jobs []*job) 
 	}
 	var list []due
 	for _, j := range jobs {
-		if j.done {
+		if skip(j) {
 			continue
 		}
 		for _, t := range j.snaps {
 			raw, _ := json.Marshal(t.policy)
 			sum := sha256.Sum256(append([]byte(eng.Name()+"\x00"), raw...))
 			hash := hex.EncodeToString(sum[:])
-			var memo policyMemo
-			if err := r.Store.Get(ctx, "policy:"+t.path, &memo); err == nil && memo.Hash == hash && time.Since(memo.At) < recheckAfter(t.path) {
+			var m policyMemo
+			if err := r.Store.Get(ctx, memo+t.path, &m); err == nil && m.Hash == hash && time.Since(m.At) < recheckAfter(t.path) {
 				continue
 			}
 			list = append(list, due{t, j, hash})
@@ -385,21 +431,21 @@ func (r *Runner) configure(ctx context.Context, eng engine.Engine, jobs []*job) 
 	cur, err := eng.Policies(ctx, paths)
 	if err != nil {
 		for _, d := range list {
-			if !d.j.done {
-				r.fail(ctx, d.j, "reading its policy: %v", err)
+			if !skip(d.j) {
+				fail(d.j, fmt.Sprintf("reading its policy: %v", err))
 			}
 		}
 		return
 	}
 	for i, d := range list {
-		if d.j.done {
+		if skip(d.j) {
 			continue
 		}
 		if err := eng.Configure(ctx, d.t.path, cur[i], d.t.policy); err != nil {
-			r.fail(ctx, d.j, "%v", err)
+			fail(d.j, err.Error())
 			continue
 		}
-		if err := r.Store.Put(ctx, "policy:"+d.t.path, policyMemo{Hash: d.hash, At: time.Now()}); err != nil {
+		if err := r.Store.Put(ctx, memo+d.t.path, policyMemo{Hash: d.hash, At: time.Now()}); err != nil {
 			slog.Warn("remembering a policy", "err", err)
 		}
 	}

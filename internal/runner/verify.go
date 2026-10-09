@@ -44,11 +44,38 @@ func (r *Runner) verify(ctx context.Context, id int64) (status, summary string) 
 		summary = fmt.Sprintf("%d problems found; %s", v.ErrorCount, summary)
 	}
 
+	// The local repository: the same check, and it's fast (nothing comes
+	// over the network).
+	loc, err := r.localEngine(ctx, id, cfg)
+	if err != nil {
+		r.log(ctx, id, "error", "Local copy: %v", err)
+		status, summary = "failed", summary+"; the local copy couldn't be checked"
+	} else if loc != nil {
+		r.setCurrent("verifying the local repository")
+		r.log(ctx, id, "info", "Verifying the local repository, reading back %d%% of the files", cfg.Verify.Percent)
+		lctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+		lv, err := loc.Verify(lctx, cfg.Verify.Percent)
+		cancel()
+		switch {
+		case err != nil:
+			r.log(ctx, id, "error", "Local copy: %v", err)
+			status, summary = "failed", summary+"; the local copy couldn't be checked"
+		case lv.ErrorCount > 0:
+			for _, e := range lv.Errors {
+				r.log(ctx, id, "error", "Local copy: %s", e)
+			}
+			status, summary = "failed", fmt.Sprintf("%s; %d problems in the local copy", summary, lv.ErrorCount)
+		default:
+			r.log(ctx, id, "info", "Local copy: %d objects checked, %d files (%s) read back", lv.Objects, lv.Files, Bytes(lv.Bytes))
+			summary += "; local copy OK"
+		}
+	}
+
 	if err := r.listSnapshots(ctx, id, eng); err != nil {
 		if status == "ok" {
 			status = "warn"
 		}
-	} else if err := r.retire(ctx, id, eng, cfg); err != nil && status == "ok" {
+	} else if err := r.retire(ctx, id, eng, loc, cfg); err != nil && status == "ok" {
 		status = "warn"
 	}
 	r.setCurrent("the repository size")

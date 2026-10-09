@@ -41,6 +41,10 @@ type Overview struct {
 	// LastVerify is the last repository check.
 	LastVerify *store.Run `json:"last_verify,omitempty"`
 	Repo       *RepoInfo  `json:"repo,omitempty"`
+	// Local is the local repository's folder ("" for none), and LocalInfo
+	// how the last run went there.
+	Local     string     `json:"local,omitempty"`
+	LocalInfo *LocalInfo `json:"local_info,omitempty"`
 	// ConfigError is set when the settings can't be read or resolved
 	// (a folder went missing).
 	ConfigError string `json:"config_error,omitempty"`
@@ -78,6 +82,11 @@ func (r *Runner) Overview(ctx context.Context) (Overview, error) {
 		return out, nil
 	}
 	out.Engine, out.Every, out.Stale = cfg.Engine.Type, cfg.Every.String(), cfg.StaleAfter.String()
+	out.Local = cfg.Local.Path
+	var li LocalInfo
+	if err := r.Store.Get(ctx, "local", &li); err == nil && !li.At.IsZero() && out.Local != "" {
+		out.LocalInfo = &li
+	}
 	sources, err := cfg.Resolve(os.ReadDir)
 	if err != nil {
 		out.ConfigError = err.Error()

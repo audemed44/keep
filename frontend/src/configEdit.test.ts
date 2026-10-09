@@ -21,6 +21,7 @@ const base: Config = {
   restores: "/stack/keep/restores",
   retention: { latest: 10, hourly: 48, daily: 7, weekly: 4, monthly: 24, annual: 3 },
   verify: { every: "168h", percent: 5 },
+  local: { config_file: "/app/config/keep-local.config", cache: "/app/cache/keep-local" },
   retire: [],
   ignored: [],
 };

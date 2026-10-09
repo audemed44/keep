@@ -119,6 +119,24 @@ type fakeEngine struct {
 	deleted   []string
 	contents  map[string]map[string][]byte // snapshot id → file → content
 	restored  []string
+	prefix    string // of snapshot ids
+}
+
+// fakeLocal is the local repository: a fake engine that opens a folder.
+type fakeLocal struct {
+	*fakeEngine
+	opened  []string // dir, and +create when it created one
+	openErr error
+}
+
+func (l *fakeLocal) Open(_ context.Context, dir string, create bool) error {
+	if create {
+		l.opened = append(l.opened, dir+" +create")
+		os.WriteFile(filepath.Join(dir, "kopia.repository.f"), []byte("{}"), 0o600)
+	} else {
+		l.opened = append(l.opened, dir)
+	}
+	return l.openErr
 }
 
 func (e *fakeEngine) Restore(_ context.Context, id, sub, target string) error {
@@ -205,7 +223,7 @@ func (e *fakeEngine) Snapshot(_ context.Context, paths []string, desc string) (m
 		}
 		e.taken[p] = files
 		e.n++
-		snap := engine.Snapshot{ID: fmt.Sprintf("snap%d", e.n), Path: p, Description: desc, Start: time.Now(), Size: size, Files: int64(len(files))}
+		snap := engine.Snapshot{ID: fmt.Sprintf("%ssnap%d", e.prefix, e.n), Path: p, Description: desc, Start: time.Now(), Size: size, Files: int64(len(files))}
 		got[p] = snap
 		e.listed = append(e.listed, snap)
 		if e.contents == nil {
@@ -251,6 +269,7 @@ type fixture struct {
 	store         *store.Store
 	docker        *fakeDocker
 	engine        *fakeEngine
+	local         *fakeLocal
 	runner        *Runner
 	pings         *pings
 }
@@ -289,6 +308,7 @@ func newFixture(t *testing.T, yml string) *fixture {
 		"kopia": {Name: "kopia", Running: true, Mounts: []docker.Mount{{Source: f.root, Destination: f.root, RW: true}}},
 	}}
 	f.engine = &fakeEngine{ignores: map[string][]string{}, taken: map[string][]string{}, fail: map[string]bool{}}
+	f.local = &fakeLocal{fakeEngine: &fakeEngine{ignores: map[string][]string{}, taken: map[string][]string{}, fail: map[string]bool{}, prefix: "local-"}}
 	f.pings = &pings{}
 	hb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -300,6 +320,7 @@ func newFixture(t *testing.T, yml string) *fixture {
 	f.runner = New(Options{
 		Store: db, Docker: f.docker, Heartbeat: hb.URL + "/ping/abc",
 		Engine: func(config.Config) engine.Engine { return f.engine },
+		Local:  func(config.Config) engine.Local { return f.local },
 	})
 	cfg, err := config.Parse([]byte(yml))
 	if err == nil {
@@ -901,5 +922,159 @@ sources:
 	cfg.Sources = []config.Source{{Name: "ledger", Hooks: config.Hooks{Before: "x"}}}
 	if _, err := f.runner.SaveConfig(ctx, cfg); err == nil {
 		t.Fatal("hooks without a container passed")
+	}
+}
+
+// withLocal sets up a local repository folder the engine can write to.
+func withLocal(t *testing.T, f *fixture) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "keep-repo")
+	c := f.docker.containers["kopia"]
+	c.Mounts = append(c.Mounts, docker.Mount{Source: filepath.Dir(dir), Destination: filepath.Dir(dir), RW: true})
+	f.docker.containers["kopia"] = c
+	cfg, _ := f.runner.Config()
+	cfg.Local.Path = dir
+	cfg.Local.Heartbeat = strings.TrimSuffix(f.runner.Heartbeat, "/ping/abc") + "/ping/local"
+	if _, err := f.runner.SaveConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func lastPing(f *fixture, prefix string) string {
+	f.pings.mu.Lock()
+	defer f.pings.mu.Unlock()
+	for i := len(f.pings.list) - 1; i >= 0; i-- {
+		if strings.HasPrefix(f.pings.list[i], prefix) {
+			return f.pings.list[i]
+		}
+	}
+	return ""
+}
+
+func TestLocalCopy(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	dir := withLocal(t, f)
+
+	// The first run creates the repository and snapshots every path there
+	// too, in one call.
+	id := f.runner.Run(ctx, "manual")
+	run, _ := f.store.GetRun(ctx, id)
+	if run.Status != "ok" || !slices.Equal(f.local.opened, []string{dir + " +create"}) || f.local.calls != 1 {
+		t.Fatalf("%+v %v %d", run, f.local.opened, f.local.calls)
+	}
+	for _, rs := range run.Sources {
+		if len(rs.Local) == 0 || rs.LocalError != "" || !strings.HasPrefix(rs.Local[0].ID, "local-") {
+			t.Fatalf("%+v", rs)
+		}
+	}
+	ledger := filepath.Join(f.root, "ledger")
+	if got := f.local.taken[ledger]; !slices.Equal(got, f.engine.taken[ledger]) {
+		t.Fatalf("the same files: %v %v", got, f.engine.taken[ledger])
+	}
+	if p := lastPing(f, "/ping/local"); !strings.HasPrefix(p, "/ping/local 2 of 2 sources in the local copy") {
+		t.Fatalf("%q", p)
+	}
+	o, _ := f.runner.Overview(ctx)
+	if o.Local != dir || o.LocalInfo == nil || o.LocalInfo.OK != 2 || o.LocalInfo.Size != 12345 {
+		t.Fatalf("%+v", o.LocalInfo)
+	}
+
+	// Then it connects to it; policies set once are remembered.
+	f.runner.Run(ctx, "manual")
+	if !slices.Equal(f.local.opened, []string{dir + " +create", dir}) || f.local.reads != 1 {
+		t.Fatalf("%v, %d policy reads", f.local.opened, f.local.reads)
+	}
+
+	// The main repository fails: the local copy is still taken.
+	f.engine.fail[ledger] = true
+	id = f.runner.Run(ctx, "manual")
+	rs, _ := f.store.RunSource(ctx, id, "ledger")
+	if rs.Status != "failed" || len(rs.Local) != 2 {
+		t.Fatalf("%+v", rs)
+	}
+	delete(f.engine.fail, ledger)
+
+	// The local copy fails: a warning, and the local heartbeat fails.
+	f.local.fail[ledger] = true
+	id = f.runner.Run(ctx, "manual")
+	run, _ = f.store.GetRun(ctx, id)
+	if run.Status != "warn" || !strings.Contains(run.Summary, "not in the local copy: ledger") {
+		t.Fatalf("%+v", run)
+	}
+	rs, _ = f.store.RunSource(ctx, id, "ledger")
+	if rs.Status != "ok" || len(rs.Local) != 0 || !strings.Contains(rs.LocalError, "upload failed") {
+		t.Fatalf("%+v", rs)
+	}
+	if p := lastPing(f, "/ping/local"); !strings.HasPrefix(p, "/ping/local/fail 1 of 2") {
+		t.Fatalf("%q", p)
+	}
+	if p := lastPing(f, "/ping/abc"); !strings.HasPrefix(p, "/ping/abc 2 of 2 sources backed up") {
+		t.Fatalf("the backup itself went fine: %q", p)
+	}
+}
+
+func TestLocalCopyFolderNotARepository(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	dir := withLocal(t, f)
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "photo.jpg"), []byte("x"), 0o644)
+	id := f.runner.Run(ctx, "manual")
+	run, _ := f.store.GetRun(ctx, id)
+	if run.Status != "warn" || len(f.local.opened) != 0 || f.local.calls != 0 {
+		t.Fatalf("%+v %v", run, f.local.opened)
+	}
+	if rs, _ := f.store.RunSource(ctx, id, "ledger"); !strings.Contains(rs.LocalError, "isn't a repository") {
+		t.Fatalf("%+v", rs)
+	}
+}
+
+func TestRestoreFromLocal(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	withLocal(t, f)
+	f.local.contents = map[string]map[string][]byte{}
+	run := f.runner.Run(ctx, "manual")
+
+	cfg, _ := f.runner.Config()
+	points, err := f.runner.RestorePoints(ctx, cfg, config.Source{Name: "ledger", Path: filepath.Join(f.root, "ledger")})
+	if err != nil || len(points) != 1 || !points[0].Local {
+		t.Fatalf("%+v %v", points, err)
+	}
+	id := f.runner.Do(ctx, Job{Kind: store.KindRestore, Trigger: "manual", Restore: &RestoreSpec{Source: "ledger", Run: run}})
+	got, _ := f.store.GetRun(ctx, id)
+	if got.Status != "ok" || len(f.local.restored) != 2 || len(f.engine.restored) != 0 {
+		t.Fatalf("%+v local %v main %v", got, f.local.restored, f.engine.restored)
+	}
+	if !strings.HasPrefix(f.local.restored[0], "local-") || strings.Contains(f.local.restored[0], "staging") {
+		t.Fatalf("the source's files first: %v", f.local.restored)
+	}
+
+	// Without the local copy it comes from the main repository.
+	cfg.Local.Path = ""
+	f.runner.SaveConfig(ctx, cfg)
+	f.runner.Do(ctx, Job{Kind: store.KindRestore, Trigger: "manual", Restore: &RestoreSpec{Source: "ledger", Run: run}})
+	if len(f.engine.restored) != 2 {
+		t.Fatalf("%v", f.engine.restored)
+	}
+}
+
+func TestVerifyLocal(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	withLocal(t, f)
+	f.engine.verify = engine.Verified{Objects: 40, Files: 3, Bytes: 2000}
+	f.local.verify = engine.Verified{Objects: 50, Files: 4, Bytes: 3000}
+	id := f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	run, _ := f.store.GetRun(ctx, id)
+	if run.Status != "ok" || !strings.HasSuffix(run.Summary, "; local copy OK") || !slices.Equal(f.local.verified, []int{5}) {
+		t.Fatalf("%+v %v", run, f.local.verified)
+	}
+	f.local.verify = engine.Verified{ErrorCount: 1, Errors: []string{"invalid checksum"}}
+	id = f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	if run, _ := f.store.GetRun(ctx, id); run.Status != "failed" || !strings.Contains(run.Summary, "1 problems in the local copy") {
+		t.Fatalf("%+v", run)
 	}
 }

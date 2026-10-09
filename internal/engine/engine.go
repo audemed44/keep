@@ -46,6 +46,15 @@ type Engine interface {
 	Restore(ctx context.Context, id, subpath, target string) error
 }
 
+// Local is an engine for a repository in a folder on this server, which
+// Keep opens (creating it the first time) before using it.
+type Local interface {
+	Engine
+	// Open connects to the repository in dir, creating it there when
+	// create is set (the folder is empty).
+	Open(ctx context.Context, dir string, create bool) error
+}
+
 // ErrNotInSnapshot is a restore of a path the snapshot doesn't have.
 var ErrNotInSnapshot = errors.New("not in the snapshot")
 

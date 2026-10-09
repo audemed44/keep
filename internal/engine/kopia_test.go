@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -204,5 +205,63 @@ func TestKopiaRestore(t *testing.T) {
 	f.err = map[string]error{"snapshot restore": errors.New("exit status 1: unable to get filesystem entry: error reading directory: entry not found")}
 	if err := k.Restore(context.Background(), "3c89", "nope", "/r/x/nope"); !errors.Is(err, ErrNotInSnapshot) {
 		t.Fatal(err)
+	}
+}
+
+func TestKopiaLocal(t *testing.T) {
+	f := &fakeExec{err: map[string]error{"repository status": errors.New("exit status 1: not connected")}}
+	k := &Kopia{Exec: f, Container: "kopia", ConfigFile: "/app/config/keep-local.config", Cache: "/app/cache/keep-local"}
+	ctx := context.Background()
+	if err := k.Open(ctx, "/mnt/hdd/keep-repo", true); err != nil {
+		t.Fatal(err)
+	}
+	k.Delete(ctx, []string{"a"})
+	want := []string{
+		"kopia: kopia repository status --json --config-file=/app/config/keep-local.config",
+		"kopia: kopia repository create filesystem --path=/mnt/hdd/keep-repo --cache-directory=/app/cache/keep-local --config-file=/app/config/keep-local.config",
+		"kopia: kopia snapshot delete a --delete --config-file=/app/config/keep-local.config",
+	}
+	if !slices.Equal(f.cmds, want) {
+		t.Fatalf("%q", f.cmds)
+	}
+
+	// Connected to that folder already: nothing else to do.
+	f = &fakeExec{out: map[string]string{"repository status": `{"storage":{"type":"filesystem","config":{"path":"/mnt/hdd/keep-repo"}}}`}}
+	k.Exec = f
+	if err := k.Open(ctx, "/mnt/hdd/keep-repo", false); err != nil || len(f.cmds) != 1 {
+		t.Fatal(f.cmds, err)
+	}
+	// Connected to another folder: disconnect, then connect.
+	if err := k.Open(ctx, "/mnt/hdd/other", false); err != nil || len(f.cmds) != 4 ||
+		!strings.Contains(f.cmds[2], "repository disconnect") || !strings.Contains(f.cmds[3], "repository connect filesystem --path=/mnt/hdd/other") {
+		t.Fatal(f.cmds, err)
+	}
+	// The container's own repository never gets opened.
+	if err := (&Kopia{Exec: f, Container: "kopia"}).Open(ctx, "/x", true); err == nil {
+		t.Fatal("opened without a config file")
+	}
+}
+
+// Every call to the local repository goes through its config file:
+// without it, the call reaches the container's own repository.
+func TestKopiaLocalEveryCall(t *testing.T) {
+	f := &fakeExec{}
+	k := &Kopia{Exec: f, Container: "kopia", ConfigFile: "/c/local.config", Cache: "/c/cache"}
+	ctx := context.Background()
+	k.Policies(ctx, []string{"/a"})
+	k.Configure(ctx, "/a", Current{}, Policy{Retention: ret})
+	k.Snapshot(ctx, []string{"/a"}, "Keep run 1")
+	k.Stats(ctx)
+	k.List(ctx)
+	k.Verify(ctx, 5)
+	k.Delete(ctx, []string{"x"})
+	k.Restore(ctx, "x", "", "/r")
+	if len(f.cmds) < 8 {
+		t.Fatalf("%q", f.cmds)
+	}
+	for _, c := range f.cmds {
+		if !strings.HasSuffix(c, " --config-file=/c/local.config") {
+			t.Errorf("without the config file: %s", c)
+		}
 	}
 }
