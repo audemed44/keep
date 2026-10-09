@@ -34,10 +34,18 @@ func (d *fakeDocker) Exec(_ context.Context, c string, cmd []string, stdout io.W
 	d.mu.Lock()
 	d.log = append(d.log, "exec "+c)
 	d.mu.Unlock()
-	switch cmd[0] {
-	case "chown":
+	switch {
+	case c == "app": // hooks
+		d.mu.Lock()
+		d.log[len(d.log)-1] = "hook " + c + ": " + cmd[2]
+		d.mu.Unlock()
+		if strings.Contains(cmd[2], "fail") {
+			return &docker.ExitError{Code: 1, Stderr: "it failed"}
+		}
 		return nil
-	case "rm":
+	case cmd[0] == "chown":
+		return nil
+	case cmd[0] == "rm":
 		return os.RemoveAll(cmd[len(cmd)-1])
 	}
 	if d.dump == "" {
@@ -851,5 +859,47 @@ func TestOtherSourcesAndRetire(t *testing.T) {
 	cfg, _ = f.runner.Config()
 	if len(cfg.Retire) != 2 || slices.ContainsFunc(cfg.Retire, func(r config.Retire) bool { return r.Path == "/data/shelfloom" }) {
 		t.Fatalf("the done date stays in the settings: %+v", cfg.Retire)
+	}
+}
+
+func TestHooks(t *testing.T) {
+	f := newFixture(t, baseConfig+`
+sources:
+  - {name: ledger, hooks: {container: app, before: "app pause", after: "app resume"}}
+  - {name: keep, hooks: {container: app, before: "fail now", after: "never runs"}}
+`)
+	ctx := context.Background()
+	id := f.runner.Run(ctx, "manual")
+	run, _ := f.store.GetRun(ctx, id)
+	got := map[string]store.RunSource{}
+	for _, rs := range run.Sources {
+		got[rs.Name] = rs
+	}
+	if got["ledger"].Status != "ok" || got["keep"].Status != "failed" || !strings.Contains(got["keep"].Message, "before hook failed") {
+		t.Fatalf("%+v", run.Sources)
+	}
+	if _, ok := f.engine.taken[filepath.Join(f.root, "keep")]; ok {
+		t.Fatal("a source whose before hook failed was snapshotted")
+	}
+	if log := strings.Join(f.docker.log, ","); log != "hook app: fail now,hook app: app pause,hook app: app resume" {
+		t.Fatalf("hooks: %s", log)
+	}
+
+	// A failing after hook is a warning.
+	cfg, _ := f.runner.Config()
+	cfg.Sources = []config.Source{{Name: "ledger", Hooks: config.Hooks{Container: "app", After: "fail later"}}}
+	if _, err := f.runner.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	id = f.runner.Run(ctx, "manual")
+	run, _ = f.store.GetRun(ctx, id)
+	if run.Status != "warn" || !strings.Contains(run.Summary, "warnings: ledger") {
+		t.Fatalf("%+v", run)
+	}
+
+	// Hooks need a container.
+	cfg.Sources = []config.Source{{Name: "ledger", Hooks: config.Hooks{Before: "x"}}}
+	if _, err := f.runner.SaveConfig(ctx, cfg); err == nil {
+		t.Fatal("hooks without a container passed")
 	}
 }

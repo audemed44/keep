@@ -154,6 +154,32 @@ export function SettingsPage() {
                 </div>
               ))}
             </div>
+            {cfg.ignored.length > 0 && (
+              <>
+                <h3 class="eyebrow">Not suggested</h3>
+                <div class="list">
+                  {cfg.ignored.map((p) => (
+                    <div class="list-row" key={p}>
+                      <div class="list-main">
+                        <span class="list-title mono">{p}</span>
+                        <span class="list-sub">
+                          Left out on purpose: not in Not backed up or Foyer
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-small"
+                        onClick={() =>
+                          setCfg({ ...cfg, ignored: cfg.ignored.filter((x) => x !== p) })
+                        }
+                      >
+                        <Undo2 size={13} /> Suggest again
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
             {skipped.length > 0 && (
               <>
                 <h3 class="eyebrow">Skipped</h3>

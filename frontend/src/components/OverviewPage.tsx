@@ -1,4 +1,4 @@
-import { Database, FolderPlus, HardDrive, Play, Plus } from "lucide-preact";
+import { Database, EyeOff, FolderPlus, HardDrive, Play, Plus } from "lucide-preact";
 import { useState } from "preact/hooks";
 import { api } from "../api";
 import { useData } from "../hooks";
@@ -112,6 +112,14 @@ export function OverviewPage() {
               <SuggestionRow
                 key={sg.container + (sg.path ?? sg.volume)}
                 sg={sg}
+                onIgnore={() =>
+                  action.run(async () => {
+                    const { config } = await api.config();
+                    const what = sg.path ?? sg.volume ?? "";
+                    await api.saveConfig({ ...config, ignored: [...config.ignored, what] });
+                    await reloadSuggestions();
+                  })
+                }
                 onAdd={() =>
                   setAdding({
                     path: sg.path,
@@ -141,7 +149,15 @@ export function OverviewPage() {
   );
 }
 
-function SuggestionRow({ sg, onAdd }: { sg: Suggestion; onAdd: () => void }) {
+function SuggestionRow({
+  sg,
+  onAdd,
+  onIgnore,
+}: {
+  sg: Suggestion;
+  onAdd: () => void;
+  onIgnore: () => void;
+}) {
   const what =
     sg.kind === "folder"
       ? sg.path
@@ -170,11 +186,20 @@ function SuggestionRow({ sg, onAdd }: { sg: Suggestion; onAdd: () => void }) {
           </span>
         )}
       </div>
-      {sg.kind !== "volume" && (
-        <button class="btn btn-ghost btn-small" onClick={onAdd}>
-          <Plus size={14} /> Add
+      <div class="row-actions">
+        {sg.kind !== "volume" && (
+          <button class="btn btn-ghost btn-small" onClick={onAdd}>
+            <Plus size={14} /> Add
+          </button>
+        )}
+        <button
+          class="btn btn-ghost btn-small"
+          title="Leave it out on purpose: no longer suggested"
+          onClick={onIgnore}
+        >
+          <EyeOff size={14} /> Ignore
         </button>
-      )}
+      </div>
     </div>
   );
 }

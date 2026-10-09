@@ -44,6 +44,7 @@ export interface SourceStatus {
   excludes?: string[];
   container?: string;
   volume?: string;
+  hooks?: Hooks;
   discovered: boolean;
   partial: boolean;
   state: SourceState;
@@ -93,7 +94,15 @@ export interface SourceConfig {
   container?: string;
   volume?: string;
   command?: string;
+  hooks?: Hooks;
   skip?: boolean;
+}
+
+/** Commands run with sh -c in a container around a source's snapshot. */
+export interface Hooks {
+  container?: string;
+  before?: string;
+  after?: string;
 }
 
 /** A watched folder: every folder inside it is a source. */
@@ -114,6 +123,8 @@ export interface Config {
   verify: { every: string; percent: number; heartbeat?: string };
   /** Paths whose snapshots are deleted on the first verify on or after a date. */
   retire: { path: string; after: string }[];
+  /** Container paths and volumes not suggested: left out on purpose. */
+  ignored: string[];
 }
 
 /** Snapshots of a path Keep doesn't back up now. */
