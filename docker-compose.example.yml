@@ -36,4 +36,6 @@ services:
     hostname: kopia
     volumes:
       - ./:/data:ro
+      # Kopia writes restores here (the default: next to staging).
+      - ./keep/restores:/data/keep/restores
       # … its config, cache and repository
