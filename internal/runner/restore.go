@@ -96,15 +96,23 @@ func (r *Runner) restore(ctx context.Context, id int64, spec *RestoreSpec) (stat
 		return "failed", err.Error()
 	}
 
-	// A fresh listing: the weekly one may predate the backup, or retention
-	// may have removed it since.
-	if err := r.listSnapshots(ctx, id, eng); err != nil {
-		return "failed", "listing snapshots: " + firstLine(err.Error())
-	}
-	parts, label, err := r.restoreParts(ctx, cfg, spec)
-	if err != nil {
-		r.log(ctx, id, "error", "%v", err)
-		return "failed", err.Error()
+	// From the local repository when the backup is in it: nothing comes
+	// over the network. Otherwise a fresh listing of the main one (the
+	// weekly one may predate the backup, or retention may have removed it
+	// since).
+	parts, label, loc := r.localParts(ctx, id, cfg, spec)
+	if loc != nil {
+		eng = loc
+	} else {
+		if err := r.listSnapshots(ctx, id, eng); err != nil {
+			return "failed", "listing snapshots: " + firstLine(err.Error())
+		}
+		var err error
+		parts, label, err = r.restoreParts(ctx, cfg, spec)
+		if err != nil {
+			r.log(ctx, id, "error", "%v", err)
+			return "failed", err.Error()
+		}
 	}
 	taken := parts[0].snap.Start
 	name := fmt.Sprintf("%s-%s-%d", safeName.ReplaceAllString(label, "_"), taken.Local().Format("20060102-1504"), id)
@@ -180,6 +188,33 @@ func (r *Runner) restore(ctx context.Context, id int64, spec *RestoreSpec) (stat
 	return "ok", fmt.Sprintf("Restored %s: %s, %s, into %s", what, plural(int(info.Files), "file"), Bytes(info.Size), name)
 }
 
+// localParts finds a source's backup in the local repository and opens
+// it; loc is nil when it isn't there (or can't be opened), and the main
+// repository is used.
+func (r *Runner) localParts(ctx context.Context, id int64, cfg config.Config, spec *RestoreSpec) ([]part, string, engine.Local) {
+	if cfg.Local.Path == "" || spec.Run == 0 || spec.Source == "" {
+		return nil, "", nil
+	}
+	rs, err := r.Store.RunSource(ctx, spec.Run, spec.Source)
+	if err != nil || len(rs.Local) == 0 {
+		return nil, "", nil
+	}
+	loc, err := r.localEngine(ctx, id, cfg)
+	if err != nil {
+		r.log(ctx, id, "warn", "Local copy: %v; restoring from the main repository", err)
+		return nil, "", nil
+	}
+	stage := path.Join(cfg.Staging, spec.Source)
+	var parts []part
+	for _, l := range rs.Local {
+		parts = append(parts, part{snap: store.Snapshot{ID: l.ID, Path: l.Path, Start: rs.Started}, staged: l.Path == stage})
+	}
+	// The source's own files first, then the database copies over them.
+	sort.SliceStable(parts, func(i, j int) bool { return !parts[i].staged && parts[j].staged })
+	r.log(ctx, id, "info", "Restoring from the local copy")
+	return parts, spec.Source, loc
+}
+
 // restoreParts finds the snapshots to restore and a label for the folder.
 func (r *Runner) restoreParts(ctx context.Context, cfg config.Config, spec *RestoreSpec) ([]part, string, error) {
 	if spec.Snapshot != "" {
@@ -225,6 +260,8 @@ type RestorePoint struct {
 	Taken time.Time `json:"taken"`
 	Size  int64     `json:"size"`
 	Files int64     `json:"files"`
+	// Local is true when it's in the local repository: a fast restore.
+	Local bool `json:"local,omitempty"`
 	parts []part
 }
 
@@ -276,6 +313,21 @@ func (r *Runner) RestorePoints(ctx context.Context, cfg config.Config, src confi
 	for _, rs := range recent {
 		if _, ok := byRun[rs.RunID]; !ok && rs.Finished.After(listed) {
 			byRun[rs.RunID] = &RestorePoint{Run: rs.RunID, Taken: rs.Started, Size: rs.Size, Files: rs.Files}
+		}
+	}
+	if cfg.Local.Path != "" {
+		// Backups in the local repository, even when the main one failed.
+		locals, err := r.Store.LocalRuns(ctx, src.Name, 400)
+		if err != nil {
+			return nil, err
+		}
+		for _, rs := range locals {
+			p := byRun[rs.RunID]
+			if p == nil {
+				p = &RestorePoint{Run: rs.RunID, Taken: rs.Started, Size: rs.Size, Files: rs.Files}
+				byRun[rs.RunID] = p
+			}
+			p.Local = true
 		}
 	}
 	out := make([]RestorePoint, 0, len(byRun))

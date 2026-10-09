@@ -154,3 +154,31 @@ func TestRetire(t *testing.T) {
 		t.Fatal("due from the start of the day")
 	}
 }
+
+func TestLocal(t *testing.T) {
+	c, err := Parse([]byte("staging: /data/keep/staging\nlocal: {path: /mnt/hdd/keep-repo/}"))
+	if err != nil || c.Local.Path != "/mnt/hdd/keep-repo" || c.Local.ConfigFile != "/app/config/keep-local.config" {
+		t.Fatalf("%+v %v", c.Local, err)
+	}
+	if c, err := Parse(nil); err != nil || c.Local.Path != "" {
+		t.Fatalf("off by default: %+v %v", c.Local, err)
+	}
+	for _, tc := range []struct{ yml, want string }{
+		{"local: {path: repo}", "absolute"},
+		{"local: {path: /}", "absolute"},
+		{"local: {path: /x, heartbeat: lookout}", "http(s)"},
+		{"local: {path: /x, config_file: c}", "absolute"},
+		{"staging: /data/keep/staging\nlocal: {path: /data/keep}", "staging"},
+		{"roots: [{path: /data}]\nlocal: {path: /data/repo}", "watched folder"},
+		{"sources: [{name: docs, path: /mnt/hdd}]\nlocal: {path: /mnt/hdd/repo}", "source"},
+	} {
+		_, err := Parse([]byte(tc.yml))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", tc.yml, err, tc.want)
+		}
+	}
+	// A skipped source's folder can hold it.
+	if _, err := Parse([]byte("sources: [{name: docs, path: /mnt/hdd, skip: true}]\nlocal: {path: /mnt/hdd/repo}")); err != nil {
+		t.Fatal(err)
+	}
+}

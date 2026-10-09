@@ -41,6 +41,16 @@ type RunSource struct {
 	Databases int       `json:"databases"`
 	Message   string    `json:"message"`
 	Snapshots []string  `json:"snapshots"`
+	// Local are its snapshots in the local repository, and LocalError why
+	// it has none (or not all).
+	Local      []LocalSnapshot `json:"local"`
+	LocalError string          `json:"local_error,omitempty"`
+}
+
+// LocalSnapshot is one snapshot in the local repository.
+type LocalSnapshot struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
 }
 
 type LogLine struct {
@@ -82,14 +92,19 @@ func (s *Store) AbandonRuns(ctx context.Context, at time.Time) error {
 // SaveRunSource inserts or replaces a source's result in a run.
 func (s *Store) SaveRunSource(ctx context.Context, rs RunSource) error {
 	snaps, _ := json.Marshal(nonNil(rs.Snapshots))
+	local := []byte("[]")
+	if len(rs.Local) > 0 {
+		local, _ = json.Marshal(rs.Local)
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO run_sources (run_id, name, strategy, status, started, finished, size, files, databases, message, snapshots)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO run_sources (run_id, name, strategy, status, started, finished, size, files, databases, message, snapshots, local, local_error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(run_id, name) DO UPDATE SET strategy = excluded.strategy, status = excluded.status,
 		   started = excluded.started, finished = excluded.finished, size = excluded.size, files = excluded.files,
-		   databases = excluded.databases, message = excluded.message, snapshots = excluded.snapshots`,
+		   databases = excluded.databases, message = excluded.message, snapshots = excluded.snapshots,
+		   local = excluded.local, local_error = excluded.local_error`,
 		rs.RunID, rs.Name, rs.Strategy, rs.Status, ms(rs.Started), ms(rs.Finished), rs.Size, rs.Files,
-		rs.Databases, rs.Message, string(snaps))
+		rs.Databases, rs.Message, string(snaps), string(local), rs.LocalError)
 	return err
 }
 
@@ -174,7 +189,7 @@ func (s *Store) FirstRun(ctx context.Context, kind string) (Run, error) {
 
 func (s *Store) querySources(ctx context.Context, where string, args ...any) ([]RunSource, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT run_id, name, strategy, status, started, finished, size, files, databases, message, snapshots
+		`SELECT run_id, name, strategy, status, started, finished, size, files, databases, message, snapshots, local, local_error
 		 FROM run_sources `+where, args...)
 	if err != nil {
 		return nil, err
@@ -184,13 +199,14 @@ func (s *Store) querySources(ctx context.Context, where string, args ...any) ([]
 	for rows.Next() {
 		var rs RunSource
 		var started, finished int64
-		var snaps string
+		var snaps, local string
 		if err := rows.Scan(&rs.RunID, &rs.Name, &rs.Strategy, &rs.Status, &started, &finished,
-			&rs.Size, &rs.Files, &rs.Databases, &rs.Message, &snaps); err != nil {
+			&rs.Size, &rs.Files, &rs.Databases, &rs.Message, &snaps, &local, &rs.LocalError); err != nil {
 			return nil, err
 		}
 		rs.Started, rs.Finished = fromMS(started), fromMS(finished)
 		_ = json.Unmarshal([]byte(snaps), &rs.Snapshots)
+		_ = json.Unmarshal([]byte(local), &rs.Local)
 		out = append(out, rs)
 	}
 	return out, rows.Err()
@@ -237,6 +253,24 @@ func (s *Store) SourceSizes(ctx context.Context, name string, limit int) ([]RunS
 		list[i], list[j] = list[j], list[i]
 	}
 	return list, err
+}
+
+// RunSource reads one source's result in a run.
+func (s *Store) RunSource(ctx context.Context, runID int64, name string) (RunSource, error) {
+	list, err := s.querySources(ctx, `WHERE run_id = ? AND name = ?`, runID, name)
+	if err != nil {
+		return RunSource{}, err
+	}
+	if len(list) == 0 {
+		return RunSource{}, ErrNotFound
+	}
+	return list[0], nil
+}
+
+// LocalRuns are a source's results that have snapshots in the local
+// repository, newest first.
+func (s *Store) LocalRuns(ctx context.Context, name string, limit int) ([]RunSource, error) {
+	return s.querySources(ctx, `WHERE name = ? AND local != '[]' ORDER BY run_id DESC LIMIT ?`, name, limit)
 }
 
 // RunLog lists a run's log lines after the line id after.

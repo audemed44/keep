@@ -282,10 +282,50 @@ export function SettingsPage() {
             </div>
           </section>
 
+          <section class="section">
+            <SectionHead index={6} title="Local copy" />
+            <p class="muted">
+              A second repository in a folder on this server, on another disk than the data. Every
+              backup snapshots each source into it too, straight from the disk, so it doesn't depend
+              on the main repository or the network, and restores come from it when they can (much
+              faster). Keep creates it in an empty folder, with the engine's password.
+            </p>
+            <div class="form-grid">
+              <Field
+                label="Folder"
+                hint="Empty turns it off. The engine must see it at the same path, read-write, and it can't be in anything backed up."
+                class="span-2"
+              >
+                <input
+                  class="input mono"
+                  placeholder="/mnt/hdd/keep-repo"
+                  value={cfg.local.path ?? ""}
+                  onInput={(e) =>
+                    setCfg({ ...cfg, local: { ...cfg.local, path: e.currentTarget.value } })
+                  }
+                />
+              </Field>
+              <Field
+                label="Heartbeat URL"
+                hint="Pinged after each backup with how the local copy went (/fail when a source is missing from it)."
+                class="span-2"
+              >
+                <input
+                  class="input mono"
+                  placeholder="https://lookout…/ping/…"
+                  value={cfg.local.heartbeat ?? ""}
+                  onInput={(e) =>
+                    setCfg({ ...cfg, local: { ...cfg.local, heartbeat: e.currentTarget.value } })
+                  }
+                />
+              </Field>
+            </div>
+          </section>
+
           <OldSnapshots cfg={cfg} setCfg={setCfg} />
 
           <section class="section">
-            <SectionHead index={7} title="Engine" />
+            <SectionHead index={8} title="Engine" />
             <div class="form-grid">
               <Field
                 label={`${cfg.engine.type} container`}
@@ -367,7 +407,7 @@ function OldSnapshots(props: { cfg: Config; setCfg: (c: Config) => void }) {
   const listed = data?.listed && !data.listed.startsWith("0001") ? data.listed : "";
   return (
     <section class="section">
-      <SectionHead index={6} title="Old snapshots" />
+      <SectionHead index={7} title="Old snapshots" />
       <p class="muted">
         Snapshots in the repository of folders Keep doesn't back up now: from before Keep, or of
         sources since removed. Nothing expires them; give one a date and the first verify on or

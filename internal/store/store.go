@@ -76,6 +76,9 @@ var migrations = []string{
 		files       INTEGER NOT NULL DEFAULT 0
 	 );
 	 CREATE INDEX snapshots_path ON snapshots (path, start);`,
+	// The local repository's snapshots of each source, and why it has none.
+	`ALTER TABLE run_sources ADD COLUMN local TEXT NOT NULL DEFAULT '[]'; -- JSON: [{id, path}]
+	 ALTER TABLE run_sources ADD COLUMN local_error TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open opens (or creates) the database.

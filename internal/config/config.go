@@ -56,6 +56,9 @@ type Config struct {
 	Retention Retention `yaml:"retention" json:"retention"`
 	// Verify is the repository check, a job of its own.
 	Verify Verify `yaml:"verify" json:"verify"`
+	// Local is a second repository in a folder on this server (another
+	// disk), snapshotted in the same runs.
+	Local Local `yaml:"local" json:"local"`
 	// Ignored are container paths and volumes not to suggest backing up:
 	// left out on purpose.
 	Ignored []string `yaml:"ignored" json:"ignored"`
@@ -86,6 +89,23 @@ type Verify struct {
 	Percent int `yaml:"percent" json:"percent"`
 	// Heartbeat is a healthchecks-style ping URL for the check (optional).
 	Heartbeat string `yaml:"heartbeat" json:"heartbeat,omitempty"`
+}
+
+// Local is a second, separate repository in a folder: each run snapshots
+// every source into it too, straight from the disk. It's a copy that
+// doesn't depend on the main repository (or the network), and a fast one
+// to restore from.
+type Local struct {
+	// Path is the repository's folder; empty turns it off. The engine must
+	// see it at the same path, writable.
+	Path string `yaml:"path" json:"path,omitempty"`
+	// Heartbeat is a healthchecks-style ping URL, pinged after each run
+	// with how the local snapshots went (optional).
+	Heartbeat string `yaml:"heartbeat" json:"heartbeat,omitempty"`
+	// ConfigFile and Cache are where the engine keeps its connection to
+	// the repository and its cache, inside the engine's container.
+	ConfigFile string `yaml:"config_file" json:"config_file"`
+	Cache      string `yaml:"cache" json:"cache"`
 }
 
 // Retention mirrors Kopia's and restic's keep-* rules. All zero means the
@@ -366,6 +386,48 @@ func (c Config) validate() (Config, error) {
 			if s.Container == "" {
 				return Config{}, fmt.Errorf("%s: stop needs the containers to stop", s.Name)
 			}
+		}
+	}
+	return c.validateLocal()
+}
+
+// validateLocal checks the local repository's folder: apart from
+// everything that's backed up, staging and restores, so the repository
+// never ends up in a snapshot.
+func (c Config) validateLocal() (Config, error) {
+	l := &c.Local
+	if l.ConfigFile == "" {
+		l.ConfigFile = "/app/config/keep-local.config"
+	}
+	if l.Cache == "" {
+		l.Cache = "/app/cache/keep-local"
+	}
+	if !path.IsAbs(l.ConfigFile) || !path.IsAbs(l.Cache) {
+		return Config{}, errors.New("local: the config file and cache must be absolute paths")
+	}
+	l.Heartbeat = strings.TrimSpace(l.Heartbeat)
+	if h := l.Heartbeat; h != "" && !strings.HasPrefix(h, "https://") && !strings.HasPrefix(h, "http://") {
+		return Config{}, errors.New("local: the heartbeat must be an http(s) URL")
+	}
+	if l.Path = strings.TrimSpace(l.Path); l.Path == "" {
+		return c, nil
+	}
+	if !path.IsAbs(l.Path) || path.Clean(l.Path) == "/" {
+		return Config{}, errors.New("local: the folder must be an absolute path")
+	}
+	l.Path = path.Clean(l.Path)
+	checks := [][2]string{{c.Staging, "staging"}, {c.Restores, "restores"}}
+	for _, r := range c.Roots {
+		checks = append(checks, [2]string{r.Path, "the watched folder"})
+	}
+	for _, s := range c.Sources {
+		if s.Path != "" && !s.Skip {
+			checks = append(checks, [2]string{s.Path, "the source"})
+		}
+	}
+	for _, ch := range checks {
+		if within(l.Path, ch[0]) || within(ch[0], l.Path) {
+			return Config{}, fmt.Errorf("local: %s can't be inside %s %s, or hold it", l.Path, ch[1], ch[0])
 		}
 	}
 	return c, nil

@@ -286,6 +286,7 @@ export function RestoreDialog(props: { source: string; onClose: () => void }) {
               {points.map((p) => (
                 <option key={p.run} value={p.run}>
                   {when(p.taken)} · run {p.run} · {bytes(p.size)}
+                  {p.local ? " · local copy" : ""}
                 </option>
               ))}
             </select>

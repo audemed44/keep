@@ -19,6 +19,9 @@ export interface RunSource {
   databases: number;
   message: string;
   snapshots: string[];
+  /** Its snapshots in the local repository, and why there are none. */
+  local: { id: string; path: string }[];
+  local_error?: string;
 }
 
 export type RunKind = "backup" | "verify" | "restore";
@@ -64,6 +67,9 @@ export interface Overview {
   next_kind: RunKind;
   last_run?: Run;
   last_verify?: Run;
+  /** The local repository's folder ("" for none) and the last run there. */
+  local?: string;
+  local_info?: { size: number; at: string; ok: number; total: number };
   repo?: { size: number; at: string };
   config_error?: string;
   config_file: string;
@@ -122,6 +128,8 @@ export interface Config {
   restores: string;
   retention: Retention;
   verify: { every: string; percent: number; heartbeat?: string };
+  /** A second repository in a folder on this server; no path turns it off. */
+  local: { path?: string; heartbeat?: string; config_file: string; cache: string };
   /** Paths whose snapshots are deleted on the first verify on or after a date. */
   retire: { path: string; after: string }[];
   /** Container paths and volumes not suggested: left out on purpose. */
@@ -176,6 +184,8 @@ export interface RestorePoint {
   taken: string;
   size: number;
   files: number;
+  /** In the local repository: a fast restore. */
+  local?: boolean;
 }
 
 export interface RestoreSpec {

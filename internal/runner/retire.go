@@ -88,9 +88,10 @@ func (r *Runner) OtherSources(ctx context.Context) ([]OtherSource, time.Time, er
 }
 
 // retire deletes the snapshots of paths whose retire date has come, from
-// a fresh listing, and drops those entries from the settings. The error
-// is for anything that needs a look (the run ends with warnings).
-func (r *Runner) retire(ctx context.Context, id int64, eng engine.Engine, cfg config.Config) error {
+// a fresh listing, in the local repository too (loc, when there's one),
+// and drops those entries from the settings. The error is for anything
+// that needs a look (the run ends with warnings).
+func (r *Runner) retire(ctx context.Context, id int64, eng engine.Engine, loc engine.Local, cfg config.Config) error {
 	ours := keepPaths(cfg)
 	var keep []config.Retire
 	changed := false
@@ -126,6 +127,12 @@ func (r *Runner) retire(ctx context.Context, id int64, eng engine.Engine, cfg co
 		}
 		r.log(ctx, id, "info", "Deleted %s of %s (retire date %s)", plural(len(ids), "snapshot"), rt.Path, rt.After)
 		changed = true
+		if loc != nil {
+			if err := r.retireLocal(ctx, id, loc, rt.Path); err != nil {
+				r.log(ctx, id, "warn", "Deleting the local snapshots of %s: %v", rt.Path, err)
+				failed = err
+			}
+		}
 	}
 	if changed {
 		cfg.Retire = keep
@@ -134,4 +141,27 @@ func (r *Runner) retire(ctx context.Context, id int64, eng engine.Engine, cfg co
 		}
 	}
 	return failed
+}
+
+// retireLocal deletes a path's snapshots in the local repository. Its
+// listing is read each time: retire dates are rare, and it's fast.
+func (r *Runner) retireLocal(ctx context.Context, id int64, loc engine.Local, p string) error {
+	list, err := loc.List(ctx)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, s := range list {
+		if s.Path == p {
+			ids = append(ids, s.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := loc.Delete(ctx, ids); err != nil {
+		return err
+	}
+	r.log(ctx, id, "info", "Deleted %s of %s in the local copy", plural(len(ids), "snapshot"), p)
+	return nil
 }

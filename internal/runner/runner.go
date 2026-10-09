@@ -43,6 +43,8 @@ type Options struct {
 	DefaultStaging string
 	// Engine builds the engine for a config; tests swap it.
 	Engine func(config.Config) engine.Engine
+	// Local builds the engine for the local repository.
+	Local func(config.Config) engine.Local
 	// Heartbeat is a healthchecks-style ping URL: /start, then the URL
 	// itself or /fail. Empty: no pings.
 	Heartbeat string
@@ -76,6 +78,11 @@ func New(o Options) *Runner {
 	if o.Engine == nil {
 		o.Engine = func(c config.Config) engine.Engine {
 			return &engine.Kopia{Exec: o.Docker, Container: c.Engine.Container}
+		}
+	}
+	if o.Local == nil {
+		o.Local = func(c config.Config) engine.Local {
+			return &engine.Kopia{Exec: o.Docker, Container: c.Engine.Container, ConfigFile: c.Local.ConfigFile, Cache: c.Local.Cache}
 		}
 	}
 	return &Runner{Options: o, client: &http.Client{Timeout: 15 * time.Second}, trigger: make(chan request, 1)}

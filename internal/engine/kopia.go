@@ -21,13 +21,26 @@ import (
 type Kopia struct {
 	Exec      Execer
 	Container string
+	// ConfigFile, when set, connects to another repository than the
+	// container's own (the local one), with its cache in Cache.
+	ConfigFile, Cache string
 }
 
 func (k *Kopia) Name() string { return "kopia" }
 
+// argv is the command line for args, with the config file when there is
+// one.
+func (k *Kopia) argv(args ...string) []string {
+	cmd := append([]string{"kopia"}, args...)
+	if k.ConfigFile != "" {
+		cmd = append(cmd, "--config-file="+k.ConfigFile)
+	}
+	return cmd
+}
+
 func (k *Kopia) run(ctx context.Context, args ...string) ([]byte, error) {
 	var out bytes.Buffer
-	err := k.Exec.Exec(ctx, k.Container, append([]string{"kopia"}, args...), &out)
+	err := k.Exec.Exec(ctx, k.Container, k.argv(args...), &out)
 	if err != nil {
 		return nil, fmt.Errorf("kopia %s: %w", args[0]+" "+args[1], err)
 	}
@@ -122,9 +135,8 @@ func (k *Kopia) Configure(ctx context.Context, path string, cur Current, pol Pol
 
 func (k *Kopia) Snapshot(ctx context.Context, paths []string, description string) (map[string]Snapshot, error) {
 	var out bytes.Buffer
-	cmd := append([]string{"kopia", "snapshot", "create"}, paths...)
-	cmd = append(cmd, "--json", "--description="+description)
-	err := k.Exec.Exec(ctx, k.Container, cmd, &out)
+	args := append([]string{"snapshot", "create"}, paths...)
+	err := k.Exec.Exec(ctx, k.Container, k.argv(append(args, "--json", "--description="+description)...), &out)
 	// One manifest per line for each path that worked, even when others
 	// failed (then the exit status is 1 and stderr says which).
 	got := map[string]Snapshot{}
@@ -193,8 +205,8 @@ func (k *Kopia) List(ctx context.Context) ([]Snapshot, error) {
 // with the errors as JSON on stdout, and exits 1 when it found any.
 func (k *Kopia) Verify(ctx context.Context, percent int) (Verified, error) {
 	var out bytes.Buffer
-	err := k.Exec.Exec(ctx, k.Container, []string{"kopia", "snapshot", "verify",
-		fmt.Sprintf("--verify-files-percent=%d", percent), "--json"}, &out)
+	err := k.Exec.Exec(ctx, k.Container, k.argv("snapshot", "verify",
+		fmt.Sprintf("--verify-files-percent=%d", percent), "--json"), &out)
 	var sum struct {
 		Stats *struct {
 			ProcessedObjectCount int64 `json:"processedObjectCount"`
@@ -245,6 +257,39 @@ func (k *Kopia) Delete(ctx context.Context, ids []string) error {
 		return nil
 	}
 	_, err := k.run(ctx, append(append([]string{"snapshot", "delete"}, ids...), "--delete")...)
+	return err
+}
+
+// Open connects to the filesystem repository in dir through the config
+// file, creating the repository when the folder is empty. The password is
+// the container's (KOPIA_PASSWORD), the same as its own repository's.
+// Connecting is remembered in the config file, so this is one quick
+// status call after the first time.
+func (k *Kopia) Open(ctx context.Context, dir string, create bool) error {
+	if k.ConfigFile == "" {
+		return errors.New("kopia: no config file for the local repository")
+	}
+	if out, err := k.run(ctx, "repository", "status", "--json"); err == nil {
+		var st struct {
+			Storage struct {
+				Config struct {
+					Path string `json:"path"`
+				} `json:"config"`
+			} `json:"storage"`
+		}
+		if json.Unmarshal(out, &st) == nil && st.Storage.Config.Path == dir {
+			return nil
+		}
+		// Connected to another folder (the setting changed).
+		if _, err := k.run(ctx, "repository", "disconnect"); err != nil {
+			return err
+		}
+	}
+	verb := "connect"
+	if create {
+		verb = "create"
+	}
+	_, err := k.run(ctx, "repository", verb, "filesystem", "--path="+dir, "--cache-directory="+k.Cache)
 	return err
 }
 
