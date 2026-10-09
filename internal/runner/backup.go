@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"path"
@@ -216,13 +217,8 @@ func (r *Runner) prepare(ctx context.Context, cfg config.Config, pc pathCheck, r
 func (r *Runner) snapshot(ctx context.Context, runID int64, eng engine.Engine, jobs []*job) {
 	var paths []string
 	owner := map[string]*job{}
+	r.configure(ctx, eng, jobs)
 	for _, j := range jobs {
-		for _, t := range j.snaps {
-			if err := r.configure(ctx, eng, t); err != nil {
-				r.fail(ctx, j, "%v", err)
-				break
-			}
-		}
 		if j.done {
 			continue
 		}
@@ -287,32 +283,77 @@ func errorFor(err error, p string) string {
 }
 
 // policyRecheck is how long a policy Keep set is trusted before Keep
-// reads it from the engine again (someone may have changed it there).
+// reads it from the engine again (someone may have changed it there). Each
+// path adds up to six days on top, from a hash of its path, so paths set
+// in the same run come due on different days rather than all at once.
 const policyRecheck = 7 * 24 * time.Hour
+
+func recheckAfter(p string) time.Duration {
+	h := fnv.New32a()
+	h.Write([]byte(p))
+	return policyRecheck + time.Duration(h.Sum32()%7)*24*time.Hour
+}
 
 type policyMemo struct {
 	Hash string    `json:"hash"`
 	At   time.Time `json:"at"`
 }
 
-// configure sets a path's policy, unless Keep set the same one recently:
-// reading and setting a policy costs two repository opens.
-func (r *Runner) configure(ctx context.Context, eng engine.Engine, t target) error {
-	raw, _ := json.Marshal(t.policy)
-	sum := sha256.Sum256(append([]byte(eng.Name()+"\x00"), raw...))
-	hash := hex.EncodeToString(sum[:])
-	key := "policy:" + t.path
-	var memo policyMemo
-	if err := r.Store.Get(ctx, key, &memo); err == nil && memo.Hash == hash && time.Since(memo.At) < policyRecheck {
-		return nil
+// configure sets the policies of the jobs' targets, skipping those Keep
+// set the same way recently. The rest are read in one engine call and set
+// one by one where they differ: every call opens the repository.
+func (r *Runner) configure(ctx context.Context, eng engine.Engine, jobs []*job) {
+	type due struct {
+		t    target
+		j    *job
+		hash string
 	}
-	if err := eng.Configure(ctx, t.path, t.policy); err != nil {
-		return err
+	var list []due
+	for _, j := range jobs {
+		if j.done {
+			continue
+		}
+		for _, t := range j.snaps {
+			raw, _ := json.Marshal(t.policy)
+			sum := sha256.Sum256(append([]byte(eng.Name()+"\x00"), raw...))
+			hash := hex.EncodeToString(sum[:])
+			var memo policyMemo
+			if err := r.Store.Get(ctx, "policy:"+t.path, &memo); err == nil && memo.Hash == hash && time.Since(memo.At) < recheckAfter(t.path) {
+				continue
+			}
+			list = append(list, due{t, j, hash})
+		}
 	}
-	if err := r.Store.Put(ctx, key, policyMemo{Hash: hash, At: time.Now()}); err != nil {
-		slog.Warn("remembering a policy", "err", err)
+	if len(list) == 0 {
+		return
 	}
-	return nil
+	paths := make([]string, len(list))
+	for i, d := range list {
+		paths[i] = d.t.path
+	}
+	runID := list[0].j.rs.RunID
+	r.log(ctx, runID, "info", "Checking the policies of %d paths", len(paths))
+	cur, err := eng.Policies(ctx, paths)
+	if err != nil {
+		for _, d := range list {
+			if !d.j.done {
+				r.fail(ctx, d.j, "reading its policy: %v", err)
+			}
+		}
+		return
+	}
+	for i, d := range list {
+		if d.j.done {
+			continue
+		}
+		if err := eng.Configure(ctx, d.t.path, cur[i], d.t.policy); err != nil {
+			r.fail(ctx, d.j, "%v", err)
+			continue
+		}
+		if err := r.Store.Put(ctx, "policy:"+d.t.path, policyMemo{Hash: d.hash, At: time.Now()}); err != nil {
+			slog.Warn("remembering a policy", "err", err)
+		}
+	}
 }
 
 func (r *Runner) fail(ctx context.Context, j *job, format string, args ...any) {
