@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -128,31 +129,14 @@ func (k *Kopia) Snapshot(ctx context.Context, paths []string, description string
 	got := map[string]Snapshot{}
 	dec := json.NewDecoder(&out)
 	for {
-		var m struct {
-			ID     string `json:"id"`
-			Source struct {
-				Path string `json:"path"`
-			} `json:"source"`
-			StartTime time.Time `json:"startTime"`
-			EndTime   time.Time `json:"endTime"`
-			RootEntry struct {
-				Summ struct {
-					Size      int64 `json:"size"`
-					Files     int64 `json:"files"`
-					NumFailed int64 `json:"numFailed"`
-				} `json:"summ"`
-			} `json:"rootEntry"`
-		}
+		var m manifest
 		if dec.Decode(&m) != nil {
 			break
 		}
 		if m.ID == "" {
 			continue
 		}
-		got[m.Source.Path] = Snapshot{
-			ID: m.ID, Path: m.Source.Path, Start: m.StartTime, End: m.EndTime,
-			Size: m.RootEntry.Summ.Size, Files: m.RootEntry.Summ.Files, Errors: m.RootEntry.Summ.NumFailed,
-		}
+		got[m.Source.Path] = m.snapshot()
 	}
 	switch {
 	case err != nil:
@@ -161,6 +145,106 @@ func (k *Kopia) Snapshot(ctx context.Context, paths []string, description string
 		return got, fmt.Errorf("kopia snapshot create: no snapshot for %d of %d paths; output %q", len(paths)-len(got), len(paths), clip(out.Bytes()))
 	}
 	return got, nil
+}
+
+// manifest is a snapshot as kopia's --json prints it.
+type manifest struct {
+	ID     string `json:"id"`
+	Source struct {
+		Path string `json:"path"`
+	} `json:"source"`
+	Description string    `json:"description"`
+	StartTime   time.Time `json:"startTime"`
+	EndTime     time.Time `json:"endTime"`
+	RootEntry   struct {
+		Summ struct {
+			Size      int64 `json:"size"`
+			Files     int64 `json:"files"`
+			NumFailed int64 `json:"numFailed"`
+		} `json:"summ"`
+	} `json:"rootEntry"`
+}
+
+func (m manifest) snapshot() Snapshot {
+	return Snapshot{
+		ID: m.ID, Path: m.Source.Path, Description: m.Description, Start: m.StartTime, End: m.EndTime,
+		Size: m.RootEntry.Summ.Size, Files: m.RootEntry.Summ.Files, Errors: m.RootEntry.Summ.NumFailed,
+	}
+}
+
+func (k *Kopia) List(ctx context.Context) ([]Snapshot, error) {
+	raw, err := k.run(ctx, "snapshot", "list", "--all", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var list []manifest
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("kopia snapshot list: %w", err)
+	}
+	out := make([]Snapshot, 0, len(list))
+	for _, m := range list {
+		out = append(out, m.snapshot())
+	}
+	return out, nil
+}
+
+// Verify runs snapshot verify. It prints progress lines and then a summary
+// with the errors as JSON on stdout, and exits 1 when it found any.
+func (k *Kopia) Verify(ctx context.Context, percent int) (Verified, error) {
+	var out bytes.Buffer
+	err := k.Exec.Exec(ctx, k.Container, []string{"kopia", "snapshot", "verify",
+		fmt.Sprintf("--verify-files-percent=%d", percent), "--json"}, &out)
+	var sum struct {
+		Stats *struct {
+			ProcessedObjectCount int64 `json:"processedObjectCount"`
+			ReadFileCount        int64 `json:"readFileCount"`
+			ReadBytes            int64 `json:"readBytes"`
+		} `json:"stats"`
+		ErrorCount   int      `json:"errorCount"`
+		ErrorStrings []string `json:"errorStrings"`
+	}
+	// The summary is the last JSON line that has stats; progress lines
+	// come before it.
+	found := false
+	for _, line := range bytes.Split(out.Bytes(), []byte("\n")) {
+		var doc struct {
+			Stats        json.RawMessage `json:"stats"`
+			ErrorCount   int             `json:"errorCount"`
+			ErrorStrings []string        `json:"errorStrings"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(line), &doc) != nil || doc.Stats == nil {
+			continue
+		}
+		if json.Unmarshal(line, &sum) == nil {
+			found = true
+		}
+	}
+	if !found {
+		if err == nil {
+			err = errors.New("no summary in its output")
+		}
+		return Verified{}, fmt.Errorf("kopia snapshot verify: %w", err)
+	}
+	v := Verified{Objects: sum.Stats.ProcessedObjectCount, Files: sum.Stats.ReadFileCount, Bytes: sum.Stats.ReadBytes,
+		ErrorCount: sum.ErrorCount, Errors: sum.ErrorStrings}
+	if len(v.Errors) > 50 {
+		v.Errors = v.Errors[:50]
+	}
+	if v.ErrorCount < len(sum.ErrorStrings) {
+		v.ErrorCount = len(sum.ErrorStrings)
+	}
+	if err != nil && v.ErrorCount == 0 {
+		return v, fmt.Errorf("kopia snapshot verify: %w", err)
+	}
+	return v, nil
+}
+
+func (k *Kopia) Delete(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := k.run(ctx, append(append([]string{"snapshot", "delete"}, ids...), "--delete")...)
+	return err
 }
 
 // The repository's size from content stats, which reads the local index

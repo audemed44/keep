@@ -97,6 +97,12 @@ type fakeEngine struct {
 	// calls counts Snapshot calls, configured policies set, reads Policies
 	// calls and read the paths they read.
 	calls, configured, reads, read int
+
+	listed    []engine.Snapshot // what List returns
+	verify    engine.Verified
+	verifyErr error
+	verified  []int // Verify calls' percents
+	deleted   []string
 }
 
 func (e *fakeEngine) Name() string { return "fake" }
@@ -169,6 +175,21 @@ func (e *fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[
 
 func (e *fakeEngine) Stats(context.Context) (engine.Stats, error) {
 	return engine.Stats{Size: 12345}, nil
+}
+
+func (e *fakeEngine) List(context.Context) ([]engine.Snapshot, error) {
+	return slices.Clone(e.listed), nil
+}
+
+func (e *fakeEngine) Verify(_ context.Context, percent int) (engine.Verified, error) {
+	e.verified = append(e.verified, percent)
+	return e.verify, e.verifyErr
+}
+
+func (e *fakeEngine) Delete(_ context.Context, ids []string) error {
+	e.deleted = append(e.deleted, ids...)
+	e.listed = slices.DeleteFunc(e.listed, func(s engine.Snapshot) bool { return slices.Contains(ids, s.ID) })
+	return nil
 }
 
 type pings struct {
@@ -451,7 +472,7 @@ func TestScheduleAndTrigger(t *testing.T) {
 func TestAbandonedRun(t *testing.T) {
 	f := newFixture(t, baseConfig)
 	ctx := context.Background()
-	id, _ := f.store.StartRun(ctx, "schedule", time.Now())
+	id, _ := f.store.StartRun(ctx, store.KindBackup, "schedule", time.Now())
 	f.store.SaveRunSource(ctx, store.RunSource{RunID: id, Name: "ledger", Strategy: "sqlite", Status: "running"})
 	f.store.AbandonRuns(ctx, time.Now())
 	run, _ := f.store.GetRun(ctx, id)
@@ -575,5 +596,83 @@ func TestPolicyRecheckBatched(t *testing.T) {
 	}
 	if len(spread) < 5 {
 		t.Fatalf("due dates aren't spread: %v", spread)
+	}
+}
+
+func TestVerify(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	cfg, _ := f.runner.Config()
+	hb := strings.TrimSuffix(f.runner.Heartbeat, "/ping/abc") + "/ping/verify"
+	cfg.Verify.Heartbeat = hb
+	if _, err := f.runner.SaveConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	f.engine.verify = engine.Verified{Objects: 40, Files: 3, Bytes: 2000}
+	f.engine.listed = []engine.Snapshot{{ID: "a", Path: "/data/ledger", Description: "Keep run 1", Start: time.Now()}}
+
+	id := f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	run, _ := f.store.GetRun(ctx, id)
+	if run.Kind != store.KindVerify || run.Status != "ok" || !strings.Contains(run.Summary, "3 files (2.0 kB) read back") {
+		t.Fatalf("%+v", run)
+	}
+	if !slices.Equal(f.engine.verified, []int{5}) {
+		t.Fatalf("verify calls %v: 5%% by default", f.engine.verified)
+	}
+	if list, _ := f.store.Snapshots(ctx); len(list) != 1 || list[0].Description != "Keep run 1" {
+		t.Fatalf("listing not saved: %+v", list)
+	}
+	if len(f.pings.list) != 2 || f.pings.list[0] != "/ping/verify/start " || !strings.HasPrefix(f.pings.list[1], "/ping/verify 40 objects") {
+		t.Fatalf("verify pings its own heartbeat: %q", f.pings.list)
+	}
+	// A verify isn't a backup: the overview's last backup stays empty.
+	o, _ := f.runner.Overview(ctx)
+	if o.LastRun != nil || o.LastVerify == nil || o.LastVerify.ID != id {
+		t.Fatalf("%+v %+v", o.LastRun, o.LastVerify)
+	}
+
+	// Damage found: failed, with each problem in the log.
+	f.engine.verify = engine.Verified{Objects: 4, ErrorCount: 2, Errors: []string{"invalid checksum at p14d", "invalid checksum at p15e"}}
+	id = f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	run, _ = f.store.GetRun(ctx, id)
+	if run.Status != "failed" || !strings.HasPrefix(run.Summary, "2 problems found") {
+		t.Fatalf("%+v", run)
+	}
+	logs, _ := f.store.RunLog(ctx, id, 0)
+	if !slices.ContainsFunc(logs, func(l store.LogLine) bool { return l.Level == "error" && l.Text == "invalid checksum at p15e" }) {
+		t.Fatalf("%+v", logs)
+	}
+	if last := f.pings.list[len(f.pings.list)-1]; !strings.HasPrefix(last, "/ping/verify/fail ") {
+		t.Fatal(last)
+	}
+
+	// The check couldn't run at all.
+	f.engine.verifyErr = errors.New("kopia snapshot verify: can't connect")
+	id = f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "manual"})
+	run, _ = f.store.GetRun(ctx, id)
+	if run.Status != "failed" || !strings.Contains(run.Summary, "couldn't run") {
+		t.Fatalf("%+v", run)
+	}
+}
+
+func TestScheduleVerify(t *testing.T) {
+	f := newFixture(t, baseConfig)
+	ctx := context.Background()
+	if _, kind := f.runner.schedule(ctx); kind != store.KindBackup {
+		t.Fatal("the first job is a backup")
+	}
+	// The first backup a week ago, the last one just now: the first verify
+	// is due.
+	old, _ := f.store.StartRun(ctx, store.KindBackup, "schedule", time.Now().Add(-8*24*time.Hour))
+	f.store.FinishRun(ctx, old, "ok", "", time.Now().Add(-8*24*time.Hour))
+	f.runner.Run(ctx, "manual")
+	next, kind := f.runner.schedule(ctx)
+	if kind != store.KindVerify || time.Until(next) > 2*time.Minute {
+		t.Fatalf("%s in %s", kind, time.Until(next))
+	}
+	f.runner.Do(ctx, Job{Kind: store.KindVerify, Trigger: "schedule"})
+	next, kind = f.runner.schedule(ctx)
+	if kind != store.KindBackup || time.Until(next) < 11*time.Hour {
+		t.Fatalf("after the verify: %s in %s", kind, time.Until(next))
 	}
 }

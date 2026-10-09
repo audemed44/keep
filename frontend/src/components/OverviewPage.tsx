@@ -41,14 +41,26 @@ export function OverviewPage() {
             tone={o && good < o.sources.length ? "warn" : ""}
           />
           <Figure value={o?.repo ? bytes(o.repo.size) : "—"} label="Repository" />
+          <VerifyFigure o={o} />
           <Figure
             value={o?.running ? "Now" : o?.next ? until(o.next) : "—"}
-            label={o?.every ? `Next run · every ${o.every}` : "Next run"}
+            label={
+              o?.next_kind === "verify"
+                ? "Next: verify"
+                : o?.every
+                  ? `Next backup · every ${o.every}`
+                  : "Next backup"
+            }
           />
         </div>
         <div class="toolbar">
           <button class="btn btn-primary" onClick={runNow} disabled={action.busy || !!o?.running}>
-            <Play size={14} /> {o?.running ? `Backing up ${o.current ?? ""}` : "Run now"}
+            <Play size={14} />{" "}
+            {!o?.running
+              ? "Run now"
+              : o.kind === "backup"
+                ? `Backing up ${o.current ?? ""}`
+                : `Busy: ${o.current ?? ""}`}
           </button>
           {o?.last_run && (
             <a class="link" href={`/runs/${o.last_run.id}`}>
@@ -167,9 +179,29 @@ function SuggestionRow({ sg, onAdd }: { sg: Suggestion; onAdd: () => void }) {
   );
 }
 
+/** The last repository check. */
+function VerifyFigure({ o }: { o: Overview | null }) {
+  const v = o?.last_verify;
+  if (o?.running && o.kind === "verify") {
+    return <Figure value="Running" label="Last verify" tone="accent" />;
+  }
+  if (!v) return <Figure value="—" label="Last verify" />;
+  return (
+    <a class="figure-link" href={`/runs/${v.id}`}>
+      <Figure
+        value={ago(v.started)}
+        label={`Last verify · ${RUN_LABEL[v.status]}`}
+        tone={runTone(v.status)}
+        title={v.summary}
+      />
+    </a>
+  );
+}
+
 function LastRunFigure({ o }: { o: Overview | null }) {
   if (!o) return <Figure value="—" label="Last backup" />;
-  if (o.running) return <Figure value="Running" label="Last backup" tone="accent" />;
+  if (o.running && o.kind === "backup")
+    return <Figure value="Running" label="Last backup" tone="accent" />;
   if (!o.last_run) return <Figure value="Never" label="Last backup" tone="warn" />;
   return (
     <Figure

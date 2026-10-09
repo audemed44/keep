@@ -31,6 +31,24 @@ type Engine interface {
 	Snapshot(ctx context.Context, paths []string, description string) (map[string]Snapshot, error)
 	// Stats reads the repository's size.
 	Stats(ctx context.Context) (Stats, error)
+	// List lists every snapshot in the repository.
+	List(ctx context.Context) ([]Snapshot, error)
+	// Verify checks the repository's structure and reads percent of the
+	// files back. The error is for a check that couldn't run; damage it
+	// found is in Verified.Errors.
+	Verify(ctx context.Context, percent int) (Verified, error)
+	// Delete deletes snapshots.
+	Delete(ctx context.Context, ids []string) error
+}
+
+type Verified struct {
+	Objects int64 `json:"objects"` // checked
+	Files   int64 `json:"files"`   // read back
+	Bytes   int64 `json:"bytes"`
+	// Errors are the problems found, at most 50.
+	Errors []string `json:"errors"`
+	// ErrorCount is how many there were.
+	ErrorCount int `json:"error_count"`
 }
 
 // Policy is how a path is snapshotted and how many snapshots are kept.
@@ -54,12 +72,13 @@ type Retention struct {
 }
 
 type Snapshot struct {
-	ID    string    `json:"id"`
-	Path  string    `json:"path"`
-	Start time.Time `json:"start"`
-	End   time.Time `json:"end"`
-	Size  int64     `json:"size"`
-	Files int64     `json:"files"`
+	ID          string    `json:"id"`
+	Path        string    `json:"path"`
+	Description string    `json:"description,omitempty"`
+	Start       time.Time `json:"start"`
+	End         time.Time `json:"end"`
+	Size        int64     `json:"size"`
+	Files       int64     `json:"files"`
 	// Errors counts files the engine couldn't read.
 	Errors int64 `json:"errors"`
 }

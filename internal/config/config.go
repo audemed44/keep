@@ -51,6 +51,18 @@ type Config struct {
 	Staging string `yaml:"staging" json:"staging"`
 	// Retention is how many snapshots the engine keeps per source.
 	Retention Retention `yaml:"retention" json:"retention"`
+	// Verify is the repository check, a job of its own.
+	Verify Verify `yaml:"verify" json:"verify"`
+}
+
+// Verify is how often the repository is checked and how much of it is
+// read back.
+type Verify struct {
+	Every Duration `yaml:"every" json:"every"` // default a week
+	// Percent of the files read back each time (1-100, default 5).
+	Percent int `yaml:"percent" json:"percent"`
+	// Heartbeat is a healthchecks-style ping URL for the check (optional).
+	Heartbeat string `yaml:"heartbeat" json:"heartbeat,omitempty"`
 }
 
 // Retention mirrors Kopia's and restic's keep-* rules. All zero means the
@@ -210,6 +222,22 @@ func (c Config) validate() (Config, error) {
 	}
 	if r.Latest == 0 {
 		return Config{}, errors.New("retention: keep at least the latest snapshot")
+	}
+	if c.Verify.Every == 0 {
+		c.Verify.Every = Duration(7 * 24 * time.Hour)
+	}
+	if c.Verify.Every.D() < time.Hour {
+		return Config{}, errors.New("verify: checks need at least 1h between them")
+	}
+	if c.Verify.Percent == 0 {
+		c.Verify.Percent = 5
+	}
+	if c.Verify.Percent < 0 || c.Verify.Percent > 100 {
+		return Config{}, errors.New("verify: read back between 1 and 100% of the files")
+	}
+	c.Verify.Heartbeat = strings.TrimSpace(c.Verify.Heartbeat)
+	if h := c.Verify.Heartbeat; h != "" && !strings.HasPrefix(h, "https://") && !strings.HasPrefix(h, "http://") {
+		return Config{}, errors.New("verify: the heartbeat must be an http(s) URL")
 	}
 	c.Roots = slices.Clone(c.Roots)
 	c.Sources = slices.Clone(c.Sources)

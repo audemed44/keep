@@ -8,8 +8,16 @@ import (
 	"time"
 )
 
+// Job kinds.
+const (
+	KindBackup  = "backup"
+	KindVerify  = "verify"
+	KindRestore = "restore"
+)
+
 type Run struct {
 	ID       int64     `json:"id"`
+	Kind     string    `json:"kind"`
 	Started  time.Time `json:"started"`
 	Finished time.Time `json:"finished"`
 	Trigger  string    `json:"trigger"`
@@ -42,9 +50,9 @@ type LogLine struct {
 	Text  string    `json:"text"`
 }
 
-func (s *Store) StartRun(ctx context.Context, trigger string, at time.Time) (int64, error) {
+func (s *Store) StartRun(ctx context.Context, kind, trigger string, at time.Time) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (started, trigger, status) VALUES (?, ?, 'running')`, ms(at), trigger)
+		`INSERT INTO runs (kind, started, trigger, status) VALUES (?, ?, ?, 'running')`, kind, ms(at), trigger)
 	if err != nil {
 		return 0, err
 	}
@@ -98,14 +106,14 @@ func (s *Store) Log(ctx context.Context, runID int64, level, text string) error 
 	return err
 }
 
-const runCols = `r.id, r.started, r.finished, r.trigger, r.status, r.summary,
+const runCols = `r.id, r.kind, r.started, r.finished, r.trigger, r.status, r.summary,
 	COALESCE((SELECT SUM(size) FROM run_sources WHERE run_id = r.id), 0),
 	COALESCE((SELECT SUM(files) FROM run_sources WHERE run_id = r.id), 0)`
 
 func scanRun(sc interface{ Scan(...any) error }) (Run, error) {
 	var r Run
 	var started, finished int64
-	err := sc.Scan(&r.ID, &started, &finished, &r.Trigger, &r.Status, &r.Summary, &r.Size, &r.Files)
+	err := sc.Scan(&r.ID, &r.Kind, &started, &finished, &r.Trigger, &r.Status, &r.Summary, &r.Size, &r.Files)
 	r.Started, r.Finished = fromMS(started), fromMS(finished)
 	return r, err
 }
@@ -146,13 +154,22 @@ func (s *Store) GetRun(ctx context.Context, id int64) (Run, error) {
 	return r, err
 }
 
-// LastRun is the newest run; ok is false when there's none.
-func (s *Store) LastRun(ctx context.Context) (Run, bool, error) {
-	r, err := scanRun(s.db.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r ORDER BY r.id DESC LIMIT 1`))
+// LastRun is the newest run of a kind; ok is false when there's none.
+func (s *Store) LastRun(ctx context.Context, kind string) (Run, bool, error) {
+	r, err := scanRun(s.db.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.kind = ? ORDER BY r.id DESC LIMIT 1`, kind))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Run{}, false, nil
 	}
 	return r, err == nil, err
+}
+
+// FirstRun is the oldest run of a kind still in the history.
+func (s *Store) FirstRun(ctx context.Context, kind string) (Run, error) {
+	r, err := scanRun(s.db.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.kind = ? ORDER BY r.id LIMIT 1`, kind))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, ErrNotFound
+	}
+	return r, err
 }
 
 func (s *Store) querySources(ctx context.Context, where string, args ...any) ([]RunSource, error) {

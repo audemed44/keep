@@ -81,6 +81,12 @@ export const STATE_LABEL: Record<string, string> = {
   never: "Never",
 };
 
+export const KIND_LABEL: Record<string, string> = {
+  backup: "Backup",
+  verify: "Verify",
+  restore: "Restore",
+};
+
 export const RUN_LABEL: Record<string, string> = {
   ok: "OK",
   warn: "Warnings",

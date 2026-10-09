@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../api";
 import { useData } from "../hooks";
-import { ago, bytes, plural, RUN_LABEL, runTone, took } from "../lib";
+import { ago, bytes, KIND_LABEL, plural, RUN_LABEL, runTone, took } from "../lib";
 import type { LogLine, Run } from "../types";
 import { Dot, Empty, ErrorNote, Figure, SectionHead } from "./ui";
 
@@ -52,7 +52,7 @@ function RunRow({ r }: { r: Run }) {
       <Dot tone={runTone(r.status)} title={RUN_LABEL[r.status]} />
       <a class="list-main list-link" href={`/runs/${r.id}`}>
         <span class="list-title">
-          Run {r.id} <span class="muted">· {ago(r.started)}</span>
+          {KIND_LABEL[r.kind] ?? "Run"} {r.id} <span class="muted">· {ago(r.started)}</span>
         </span>
         <span class="list-sub">{r.summary || RUN_LABEL[r.status]}</span>
       </a>
@@ -103,12 +103,16 @@ export function RunPage({ id }: { id: number }) {
             Runs
           </a>
         </div>
-        <h1 class="page-title">Run {id}</h1>
+        <h1 class="page-title">
+          {run ? (KIND_LABEL[run.kind] ?? "Run") : "Run"} {id}
+        </h1>
         {run && (
           <>
             <div class="figures stagger">
               <Figure value={RUN_LABEL[run.status]} label="Status" tone={runTone(run.status)} />
-              <Figure value={bytes(run.size)} label={`In ${plural(run.files, "file")}`} />
+              {run.kind === "backup" && (
+                <Figure value={bytes(run.size)} label={`In ${plural(run.files, "file")}`} />
+              )}
               <Figure
                 value={
                   running

@@ -128,3 +128,58 @@ func TestKopiaStats(t *testing.T) {
 		t.Fatalf("uncompressed: %+v %v", st, err)
 	}
 }
+
+func TestKopiaList(t *testing.T) {
+	f := &fakeExec{out: map[string]string{"snapshot list": `[{"id":"3c89","source":{"host":"h","userName":"root","path":"/data/a"},` +
+		`"description":"Keep run 1","startTime":"2026-10-09T06:14:53Z","endTime":"2026-10-09T06:14:54Z",` +
+		`"rootEntry":{"summ":{"size":11,"files":2}}}]`}}
+	got, err := (&Kopia{Exec: f, Container: "kopia"}).List(context.Background())
+	if err != nil || len(got) != 1 || got[0].ID != "3c89" || got[0].Path != "/data/a" || got[0].Description != "Keep run 1" || got[0].Files != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if f.cmds[0] != "kopia: kopia snapshot list --all --json" {
+		t.Fatal(f.cmds)
+	}
+}
+
+// Output as kopia 0.23 prints it, from a test repository with every pack
+// damaged.
+func TestKopiaVerify(t *testing.T) {
+	progress := `{"processedObjectCount":0,"processedBytes":0,"readFileCount":0,"readBytes":0,"expectedTotalObjectCount":4}` + "\n"
+	f := &fakeExec{out: map[string]string{"snapshot verify": progress +
+		`{"stats":{"processedObjectCount":4,"processedBytes":11,"readFileCount":0,"readBytes":0},"errorCount":2,` +
+		`"errorStrings":["error reading object ee3f: invalid checksum","error reading object f313: invalid checksum"]}` + "\n"},
+		err: map[string]error{"snapshot verify": errors.New("exit status 1: encountered 2 errors")}}
+	k := &Kopia{Exec: f, Container: "kopia"}
+	v, err := k.Verify(context.Background(), 5)
+	if err != nil || v.ErrorCount != 2 || len(v.Errors) != 2 || v.Objects != 4 {
+		t.Fatalf("damage is a result, not a failure to run: %+v %v", v, err)
+	}
+	if f.cmds[0] != "kopia: kopia snapshot verify --verify-files-percent=5 --json" {
+		t.Fatal(f.cmds)
+	}
+
+	f.out["snapshot verify"] = progress + `{"stats":{"processedObjectCount":6,"readFileCount":3,"readBytes":15},"errorCount":0}` + "\n"
+	f.err = nil
+	if v, err := k.Verify(context.Background(), 5); err != nil || v.ErrorCount != 0 || v.Files != 3 || v.Bytes != 15 {
+		t.Fatalf("%+v %v", v, err)
+	}
+
+	// No summary: the check didn't run.
+	f.out["snapshot verify"] = ""
+	f.err = map[string]error{"snapshot verify": errors.New("exit status 1: can't connect to storage")}
+	if _, err := k.Verify(context.Background(), 5); err == nil || !strings.Contains(err.Error(), "connect") {
+		t.Fatal(err)
+	}
+}
+
+func TestKopiaDelete(t *testing.T) {
+	f := &fakeExec{}
+	k := &Kopia{Exec: f, Container: "kopia"}
+	if err := k.Delete(context.Background(), []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cmds) != 1 || f.cmds[0] != "kopia: kopia snapshot delete a b --delete" {
+		t.Fatal(f.cmds)
+	}
+}

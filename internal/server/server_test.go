@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -87,6 +88,11 @@ func (e fakeEngine) Snapshot(_ context.Context, paths []string, _ string) (map[s
 	}
 	return got, nil
 }
+func (fakeEngine) List(context.Context) ([]engine.Snapshot, error) { return nil, nil }
+func (fakeEngine) Verify(context.Context, int) (engine.Verified, error) {
+	return engine.Verified{Objects: 1}, nil
+}
+func (fakeEngine) Delete(context.Context, []string) error { return nil }
 func (fakeEngine) Stats(context.Context) (engine.Stats, error) {
 	return engine.Stats{Size: 5_000_000}, nil
 }
@@ -356,6 +362,34 @@ func TestRunNow(t *testing.T) {
 		}
 	}
 	t.Fatal("the run didn't finish")
+}
+
+func TestVerifyNow(t *testing.T) {
+	h := newServer(t)
+	if rec := do(h, "POST", "/api/runs", `{"kind":"restore"}`, true); rec.Code != http.StatusBadRequest {
+		t.Fatalf("restores have their own endpoint: %d", rec.Code)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.runner.Loop(ctx)
+	rec := do(h, "POST", "/api/runs", `{"kind":"verify"}`, true)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	id := decode[map[string]int64](t, rec)["id"]
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if run := decode[store.Run](t, do(h, "GET", fmt.Sprintf("/api/runs/%d", id), "", true)); run.Status != "running" {
+			if run.Kind != "verify" || run.Status != "ok" {
+				t.Fatalf("%+v", run)
+			}
+			o := decode[runner.Overview](t, do(h, "GET", "/api/overview", "", true))
+			if o.LastVerify == nil || o.LastRun != nil {
+				t.Fatalf("%+v", o)
+			}
+			return
+		}
+	}
+	t.Fatal("the verify didn't finish")
 }
 
 func TestSPAFallback(t *testing.T) {

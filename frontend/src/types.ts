@@ -21,8 +21,11 @@ export interface RunSource {
   snapshots: string[];
 }
 
+export type RunKind = "backup" | "verify" | "restore";
+
 export interface Run {
   id: number;
+  kind: RunKind;
   started: string;
   finished: string;
   trigger: string;
@@ -54,9 +57,12 @@ export interface Overview {
   stale_after: string;
   sources: SourceStatus[];
   running?: number;
+  kind?: RunKind;
   current?: string;
   next: string;
+  next_kind: RunKind;
   last_run?: Run;
+  last_verify?: Run;
   repo?: { size: number; at: string };
   config_error?: string;
   config_file: string;
@@ -105,6 +111,7 @@ export interface Config {
   engine: { type: string; container: string };
   staging: string;
   retention: Retention;
+  verify: { every: string; percent: number; heartbeat?: string };
 }
 
 export interface Coverage {

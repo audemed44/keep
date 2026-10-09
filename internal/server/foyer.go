@@ -66,7 +66,7 @@ func (s *Server) foyerWidget(w http.ResponseWriter, r *http.Request) {
 	last := foyerStat{Label: "Last backup", Value: "Never", Tone: "warn"}
 	run := foyerItem{Title: "No backup yet", Action: &foyerAction{Label: "Run now", URL: "/api/foyer/run", Confirm: "Back up every source now?"}}
 	switch {
-	case o.Running != 0:
+	case o.Backing():
 		last = foyerStat{Label: "Last backup", Value: "Running", Caption: o.Current, Tone: "accent"}
 		run = foyerItem{Title: fmt.Sprintf("Run %d", o.Running), Subtitle: "Backing up " + o.Current, URL: fmt.Sprintf("/runs/%d", o.Running)}
 	case o.LastRun != nil:
@@ -93,7 +93,11 @@ func (s *Server) foyerWidget(w http.ResponseWriter, r *http.Request) {
 		out.Stats = append(out.Stats, foyerStat{Label: "Repository", Value: runner.Bytes(o.Repo.Size), Caption: o.Engine})
 	}
 	if o.Running == 0 && !o.Next.IsZero() && o.ConfigError == "" {
-		out.Stats = append(out.Stats, foyerStat{Label: "Next", Value: "in " + until(now, o.Next)})
+		label := "Next"
+		if o.NextKind == "verify" {
+			label = "Next check"
+		}
+		out.Stats = append(out.Stats, foyerStat{Label: label, Value: "in " + until(now, o.Next)})
 	}
 
 	out.Items = append(out.Items, run)
@@ -175,7 +179,10 @@ func (s *Server) foyerRun(w http.ResponseWriter, _ *http.Request) {
 	id, err := s.Runner.Trigger("foyer")
 	msg := "Backing up…"
 	if errors.Is(err, runner.ErrBusy) {
-		msg = "A backup is already running"
+		msg = "Keep is busy with another job"
+		if s.Runner.State().Backing() {
+			msg = "A backup is already running"
+		}
 	}
 	out := map[string]string{"message": msg}
 	if id != 0 {
@@ -204,7 +211,10 @@ func (s *Server) foyerRunStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := run.Summary
 	if run.Status == "running" {
-		msg = "Backing up " + s.Runner.State().Current
+		msg = "Busy with " + s.Runner.State().Current
+		if run.Kind == "backup" {
+			msg = "Backing up " + s.Runner.State().Current
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"state": state, "message": msg, "url": fmt.Sprintf("/runs/%d", id)})
 }
