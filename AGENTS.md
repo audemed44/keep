@@ -55,6 +55,11 @@ to back up, edited in the UI; a v1 `keep.yml` is imported once).
   Restores never go in place. Restore browsing and downloads must stay
   inside the restore folder (`inRestore` resolves symlinks). Engine
   output is read from the CLI's `--json`, not Kopia's undocumented API.
+- The local repository has its own cache, set with `KOPIA_CACHE_DIRECTORY`
+  on every command (`Kopia.argv`): the container sets that variable for its
+  own repository and Kopia prefers it to the config file's cache. A shared
+  cache made a run treat the main repository as empty. `Open` checks the
+  opened repository's unique ID against the folder's format file.
 - Keep and the engine see every path the same way (same mount paths); the
   runner checks it. Kopia applies a parent folder's ignore rules to
   snapshots inside it unless the path has its own list, so `Configure`
