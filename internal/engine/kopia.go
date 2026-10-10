@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,14 +29,18 @@ type Kopia struct {
 
 func (k *Kopia) Name() string { return "kopia" }
 
-// argv is the command line for args, with the config file when there is
-// one.
+// argv is the command line for args. For another repository than the
+// container's own it adds the config file, and the cache through
+// KOPIA_CACHE_DIRECTORY: Kopia takes that variable over the cache folder
+// in the config file, and the container sets it for its own repository.
+// Two repositories sharing a cache mix up their format, index and
+// own-writes caches, so one reads (and writes) as if it were the other.
 func (k *Kopia) argv(args ...string) []string {
-	cmd := append([]string{"kopia"}, args...)
-	if k.ConfigFile != "" {
-		cmd = append(cmd, "--config-file="+k.ConfigFile)
+	if k.ConfigFile == "" {
+		return append([]string{"kopia"}, args...)
 	}
-	return cmd
+	cmd := append([]string{"env", "KOPIA_CACHE_DIRECTORY=" + k.Cache, "kopia"}, args...)
+	return append(cmd, "--config-file="+k.ConfigFile)
 }
 
 func (k *Kopia) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -263,23 +268,22 @@ func (k *Kopia) Delete(ctx context.Context, ids []string) error {
 // Open connects to the filesystem repository in dir through the config
 // file, creating the repository when the folder is empty. The password is
 // the container's (KOPIA_PASSWORD), the same as its own repository's.
-// Connecting is remembered in the config file, so this is one quick
-// status call after the first time.
+// Connecting is remembered in the config file, so this is a status call
+// (and a read of the folder's format file) after the first time.
+//
+// Every time, it checks that the repository Kopia opened is the one in the
+// folder: the unique ID it reports must be the one in the folder's format
+// file. Anything else (a shared cache, the wrong config) is refused before
+// anything is written.
 func (k *Kopia) Open(ctx context.Context, dir string, create bool) error {
-	if k.ConfigFile == "" {
-		return errors.New("kopia: no config file for the local repository")
+	if k.ConfigFile == "" || k.Cache == "" {
+		return errors.New("kopia: no config file or cache for the local repository")
 	}
-	if out, err := k.run(ctx, "repository", "status", "--json"); err == nil {
-		var st struct {
-			Storage struct {
-				Config struct {
-					Path string `json:"path"`
-				} `json:"config"`
-			} `json:"storage"`
-		}
-		if json.Unmarshal(out, &st) == nil && st.Storage.Config.Path == dir {
-			return nil
-		}
+	st, err := k.status(ctx)
+	switch {
+	case err == nil && st.Storage.Config.Path == dir:
+		return k.sameRepository(ctx, dir, st.UniqueIDHex)
+	case err == nil:
 		// Connected to another folder (the setting changed).
 		if _, err := k.run(ctx, "repository", "disconnect"); err != nil {
 			return err
@@ -289,8 +293,53 @@ func (k *Kopia) Open(ctx context.Context, dir string, create bool) error {
 	if create {
 		verb = "create"
 	}
-	_, err := k.run(ctx, "repository", verb, "filesystem", "--path="+dir, "--cache-directory="+k.Cache)
-	return err
+	if _, err := k.run(ctx, "repository", verb, "filesystem", "--path="+dir, "--cache-directory="+k.Cache); err != nil {
+		return err
+	}
+	if st, err = k.status(ctx); err != nil {
+		return err
+	}
+	return k.sameRepository(ctx, dir, st.UniqueIDHex)
+}
+
+type kopiaStatus struct {
+	UniqueIDHex string `json:"uniqueIDHex"`
+	Storage     struct {
+		Config struct {
+			Path string `json:"path"`
+		} `json:"config"`
+	} `json:"storage"`
+}
+
+func (k *Kopia) status(ctx context.Context) (kopiaStatus, error) {
+	var st kopiaStatus
+	out, err := k.run(ctx, "repository", "status", "--json")
+	if err != nil {
+		return st, err
+	}
+	if err := json.Unmarshal(out, &st); err != nil {
+		return st, fmt.Errorf("kopia repository status: %w", err)
+	}
+	return st, nil
+}
+
+// sameRepository checks the unique ID Kopia reports against the format
+// file in dir (plain JSON; the ID is base64).
+func (k *Kopia) sameRepository(ctx context.Context, dir, reported string) error {
+	var raw bytes.Buffer
+	if err := k.Exec.Exec(ctx, k.Container, []string{"cat", dir + "/kopia.repository.f"}, &raw); err != nil {
+		return fmt.Errorf("reading the repository's format file: %w", err)
+	}
+	var f struct {
+		UniqueID []byte `json:"uniqueID"`
+	}
+	if err := json.Unmarshal(raw.Bytes(), &f); err != nil || len(f.UniqueID) == 0 {
+		return fmt.Errorf("the format file in %s has no unique ID", dir)
+	}
+	if onDisk := hex.EncodeToString(f.UniqueID); onDisk != reported {
+		return fmt.Errorf("kopia opened another repository (%.12s) than the one in %s (%.12s): refusing to use it", reported, dir, onDisk)
+	}
+	return nil
 }
 
 // Restore restores in parallel: over rclone each file is a request to

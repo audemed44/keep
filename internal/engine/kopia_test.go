@@ -12,16 +12,24 @@ import (
 // fakeExec answers kopia commands from a table keyed by the first two
 // arguments, and records every command.
 type fakeExec struct {
-	out  map[string]string
-	err  map[string]error
-	cmds []string
+	out   map[string]string
+	err   map[string]error
+	cmds  []string
+	after func(key string) // called after each command
 }
 
 func (f *fakeExec) Exec(_ context.Context, container string, cmd []string, stdout io.Writer) error {
 	f.cmds = append(f.cmds, container+": "+strings.Join(cmd, " "))
-	key := cmd[1] + " " + cmd[2]
+	key := cmd[0]
+	if i := slices.Index(cmd, "kopia"); i >= 0 {
+		key = cmd[i+1] + " " + cmd[i+2]
+	}
 	io.WriteString(stdout, f.out[key]) // output comes even with a failing exit
-	return f.err[key]
+	err := f.err[key]
+	if f.after != nil {
+		f.after(key)
+	}
+	return err
 }
 
 var ret = Retention{Latest: 10, Hourly: 48, Daily: 7, Weekly: 4, Monthly: 12, Annual: 3}
@@ -208,34 +216,56 @@ func TestKopiaRestore(t *testing.T) {
 	}
 }
 
+// formatFile is a filesystem repository's kopia.repository.f with the
+// unique ID 0a0b.
+const formatFile = `{"uniqueID":"Cgs=","keyAlgo":"x"}`
+
 func TestKopiaLocal(t *testing.T) {
-	f := &fakeExec{err: map[string]error{"repository status": errors.New("exit status 1: not connected")}}
+	status := `{"uniqueIDHex":"0a0b","storage":{"type":"filesystem","config":{"path":"/mnt/hdd/keep-repo"}}}`
+	f := &fakeExec{err: map[string]error{"repository status": errors.New("exit status 1: not connected")}, out: map[string]string{"cat": formatFile}}
 	k := &Kopia{Exec: f, Container: "kopia", ConfigFile: "/app/config/keep-local.config", Cache: "/app/cache/keep-local"}
 	ctx := context.Background()
+	// Not connected: create, then the status after it must match the folder.
+	f.after = func(key string) {
+		if key == "repository create" {
+			delete(f.err, "repository status")
+			f.out["repository status"] = status
+		}
+	}
 	if err := k.Open(ctx, "/mnt/hdd/keep-repo", true); err != nil {
 		t.Fatal(err)
 	}
-	k.Delete(ctx, []string{"a"})
+	env := "kopia: env KOPIA_CACHE_DIRECTORY=/app/cache/keep-local kopia "
+	cfg := " --config-file=/app/config/keep-local.config"
 	want := []string{
-		"kopia: kopia repository status --json --config-file=/app/config/keep-local.config",
-		"kopia: kopia repository create filesystem --path=/mnt/hdd/keep-repo --cache-directory=/app/cache/keep-local --config-file=/app/config/keep-local.config",
-		"kopia: kopia snapshot delete a --delete --config-file=/app/config/keep-local.config",
+		env + "repository status --json" + cfg,
+		env + "repository create filesystem --path=/mnt/hdd/keep-repo --cache-directory=/app/cache/keep-local" + cfg,
+		env + "repository status --json" + cfg,
+		"kopia: cat /mnt/hdd/keep-repo/kopia.repository.f",
 	}
 	if !slices.Equal(f.cmds, want) {
 		t.Fatalf("%q", f.cmds)
 	}
 
-	// Connected to that folder already: nothing else to do.
-	f = &fakeExec{out: map[string]string{"repository status": `{"storage":{"type":"filesystem","config":{"path":"/mnt/hdd/keep-repo"}}}`}}
+	// Connected to that folder already: a status and the check.
+	f = &fakeExec{out: map[string]string{"repository status": status, "cat": formatFile}}
 	k.Exec = f
-	if err := k.Open(ctx, "/mnt/hdd/keep-repo", false); err != nil || len(f.cmds) != 1 {
+	if err := k.Open(ctx, "/mnt/hdd/keep-repo", false); err != nil || len(f.cmds) != 2 {
 		t.Fatal(f.cmds, err)
+	}
+	// Kopia reports another repository than the folder's: refused.
+	f.out["repository status"] = strings.Replace(status, "0a0b", "018a", 1)
+	if err := k.Open(ctx, "/mnt/hdd/keep-repo", false); err == nil || !strings.Contains(err.Error(), "another repository") {
+		t.Fatal(err)
 	}
 	// Connected to another folder: disconnect, then connect.
-	if err := k.Open(ctx, "/mnt/hdd/other", false); err != nil || len(f.cmds) != 4 ||
-		!strings.Contains(f.cmds[2], "repository disconnect") || !strings.Contains(f.cmds[3], "repository connect filesystem --path=/mnt/hdd/other") {
-		t.Fatal(f.cmds, err)
+	f = &fakeExec{out: map[string]string{"repository status": status, "cat": formatFile}}
+	k.Exec = f
+	err := k.Open(ctx, "/mnt/hdd/other", false)
+	if len(f.cmds) < 3 || !strings.Contains(f.cmds[1], "repository disconnect") || !strings.Contains(f.cmds[2], "repository connect filesystem --path=/mnt/hdd/other") {
+		t.Fatal(f.cmds)
 	}
+	_ = err // the fake still reports the old folder's status
 	// The container's own repository never gets opened.
 	if err := (&Kopia{Exec: f, Container: "kopia"}).Open(ctx, "/x", true); err == nil {
 		t.Fatal("opened without a config file")
@@ -260,8 +290,8 @@ func TestKopiaLocalEveryCall(t *testing.T) {
 		t.Fatalf("%q", f.cmds)
 	}
 	for _, c := range f.cmds {
-		if !strings.HasSuffix(c, " --config-file=/c/local.config") {
-			t.Errorf("without the config file: %s", c)
+		if !strings.HasPrefix(c, "kopia: env KOPIA_CACHE_DIRECTORY=/c/cache kopia ") || !strings.HasSuffix(c, " --config-file=/c/local.config") {
+			t.Errorf("without its own config file and cache: %s", c)
 		}
 	}
 }

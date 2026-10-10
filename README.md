@@ -167,8 +167,14 @@ backup that's in it is restored from it (nothing comes from Drive).
   engine container's password (`KOPIA_PASSWORD`), and keeps Kopia's
   connection to it in its own config file (`/app/config/keep-local.config`,
   cache in `/app/cache/keep-local`). Kopia runs its own maintenance on it.
-  Without Keep: `kopia --config-file=/app/config/keep-local.config snapshot
-  list`.
+- The two repositories must never share a cache: Kopia would mix up their
+  format, indexes and own writes. Kopia takes `KOPIA_CACHE_DIRECTORY` (which
+  the Kopia image sets) over the cache folder in a config file, so Keep sets
+  it on every command for the local repository. Each time Keep opens it, it
+  also checks the repository Kopia opened is the one in the folder (the
+  unique ID against the folder's `kopia.repository.f`) and won't use it
+  otherwise. Without Keep: `env KOPIA_CACHE_DIRECTORY=/app/cache/keep-local
+  kopia --config-file=/app/config/keep-local.config snapshot list`.
 - It's a separate repository, not a copy of the main one: damage in one
   can't reach the other. Retention is the same, the verify checks both, and
   old snapshots are deleted from both.
