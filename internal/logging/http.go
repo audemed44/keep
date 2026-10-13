@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,7 +23,9 @@ const slowRequest = 2 * time.Second
 //
 // Levels keep the volume down: failures (5xx) are errors, refusals (4xx)
 // warnings, changes (anything but GET/HEAD) and slow requests info, and
-// plain reads debug. /healthz isn't logged at all.
+// plain reads debug. /healthz isn't logged at all. A failure's line carries
+// what the response said went wrong (its "error", or the start of its
+// text), so handlers don't each have to log their 500s.
 func Requests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		trace := r.Header.Get("X-Request-Id")
@@ -71,6 +74,11 @@ func Requests(next http.Handler) http.Handler {
 				slog.Int64("dur_ms", dur.Milliseconds()),
 				slog.Int64("bytes", rec.bytes),
 				slog.String("ip", clientIP(r)),
+			}
+			if status >= 500 {
+				if msg := rec.failure(); msg != "" {
+					attrs = append(attrs, slog.String("err", msg))
+				}
 			}
 			slog.LogAttrs(ctx, level, route(r), attrs...)
 		}()
@@ -125,6 +133,24 @@ type recorder struct {
 	status int
 	bytes  int64
 	wrote  bool
+	body   []byte // the start of a failure's body
+}
+
+// failureBody is how much of a 5xx response is kept for its log line.
+const failureBody = 1 << 10
+
+// failure is what a 5xx response said: its JSON "error", or its text.
+func (r *recorder) failure() string {
+	if len(r.body) == 0 {
+		return ""
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(r.body, &e) == nil && e.Error != "" {
+		return e.Error
+	}
+	return strings.TrimSpace(string(r.body))
 }
 
 func (r *recorder) WriteHeader(code int) {
@@ -137,6 +163,9 @@ func (r *recorder) WriteHeader(code int) {
 func (r *recorder) Write(b []byte) (int, error) {
 	if !r.wrote {
 		r.status, r.wrote = http.StatusOK, true
+	}
+	if r.status >= 500 && len(r.body) < failureBody {
+		r.body = append(r.body, b[:min(len(b), failureBody-len(r.body))]...)
 	}
 	n, err := r.ResponseWriter.Write(b)
 	r.bytes += int64(n)

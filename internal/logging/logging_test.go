@@ -203,6 +203,30 @@ func TestRequests(t *testing.T) {
 	}
 }
 
+func TestFailureCause(t *testing.T) {
+	buf, _, _ := testLogger(t, slog.LevelInfo)
+	h := Requests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/json":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`{"error":"database is locked"}`))
+		case "/text":
+			http.Error(w, "upstream timed out", 502)
+		default:
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"not logged for 4xx"}`))
+		}
+	}))
+	for _, p := range []string{"/json", "/text", "/bad"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", p, nil))
+	}
+	lines := buf.lines(t)
+	if lines[0]["err"] != "database is locked" || lines[1]["err"] != "upstream timed out" || lines[2]["err"] != nil {
+		t.Fatalf("lines: %v", lines)
+	}
+}
+
 func TestRouteMessage(t *testing.T) {
 	buf, _, _ := testLogger(t, slog.LevelDebug)
 	api := http.NewServeMux()
