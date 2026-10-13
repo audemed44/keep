@@ -29,6 +29,12 @@ services:
     ports:
       - "8091:8080"
     mem_limit: 64m
+    # Cap Docker's copy of the logs: 3 files of 10 MB, oldest dropped.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   kopia:
     image: kopia/kopia:0.23.1

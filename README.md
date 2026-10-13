@@ -97,7 +97,9 @@ writes nothing outside its own folder. See [docker-compose.example.yml](docker-c
 | `KEEP_CONTAINER` | the hostname | Keep's own container, to find host paths |
 | `KEEP_PORT` | `8080` | Port inside the container |
 | `HOMEPAGE_URL` | | Foyer's address, linked from the header |
-| `KEEP_DEBUG` | | Set to log debug messages |
+| `KEEP_DEBUG` | | Same as `LOG_LEVEL=debug` (older setting) |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `LOG_FORMAT` | `json` | `text` for reading in a terminal |
 
 ## Choosing what to back up
 
@@ -198,6 +200,17 @@ source since removed) never expire: nothing snapshots those paths any more.
 Settings lists them with a **Delete after** date; the first verify on or
 after it deletes all of that path's snapshots. Each one's newest snapshot
 can be restored from there too.
+
+## Logs
+
+Keep writes one JSON object per line on stderr, for
+[Logbook](https://github.com/audemed44/logbook) to collect: every request
+(failures as errors, changes at info, plain reads at debug), background
+jobs with how long they took, and an audit line for sign-ins. Nothing it
+stores goes into the logs. A message repeated more than 20 times a minute
+is held back and counted, at most 600 lines a minute get out, and long
+values are cut at 4 KB, so a failing Keep can't flood the disk. Docker's
+own copy is capped in compose (`logging:`, 3 × 10 MB).
 
 ## Foyer
 

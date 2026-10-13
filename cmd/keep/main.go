@@ -17,6 +17,7 @@ import (
 
 	"github.com/audemed44/keep/internal/config"
 	"github.com/audemed44/keep/internal/docker"
+	"github.com/audemed44/keep/internal/logging"
 	"github.com/audemed44/keep/internal/runner"
 	"github.com/audemed44/keep/internal/server"
 	"github.com/audemed44/keep/internal/store"
@@ -34,11 +35,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck())
 	}
-	level := slog.LevelInfo
-	if os.Getenv("KEEP_DEBUG") != "" {
-		level = slog.LevelDebug
+	// KEEP_DEBUG still works: it's LOG_LEVEL=debug.
+	if os.Getenv("KEEP_DEBUG") != "" && os.Getenv("LOG_LEVEL") == "" {
+		os.Setenv("LOG_LEVEL", "debug")
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	logging.Setup("keep", os.Stderr)
 
 	token := os.Getenv("KEEP_TOKEN")
 	if token == "" {
@@ -84,6 +85,7 @@ func main() {
 		Addr:              ":" + env("KEEP_PORT", "8080"),
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          logging.ServerErrorLog(),
 	}
 	go func() {
 		<-ctx.Done()
