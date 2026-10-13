@@ -12,7 +12,7 @@ import (
 func (s *Server) getOverview(w http.ResponseWriter, r *http.Request) {
 	o, err := s.Runner.Overview(r.Context())
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, o)
@@ -22,7 +22,7 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
 	runs, err := s.Store.Runs(r.Context(), before, 50)
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
@@ -56,7 +56,7 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.Store.GetRun(r.Context(), id)
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
@@ -70,7 +70,7 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	lines, err := s.Store.RunLog(r.Context(), id, after)
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lines)
@@ -79,7 +79,7 @@ func (s *Server) runLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sourceHistory(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Store.SourceSizes(r.Context(), r.PathValue("name"), 60)
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, list)

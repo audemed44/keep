@@ -37,7 +37,7 @@ func (s *Server) restorePoints(w http.ResponseWriter, r *http.Request) {
 		}
 		points, err := s.Runner.RestorePoints(r.Context(), cfg, src)
 		if err != nil {
-			storeError(w, err)
+			storeError(w, r, err)
 			return
 		}
 		listed, _ := s.Store.SnapshotsListed(r.Context())

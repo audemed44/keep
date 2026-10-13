@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/audemed44/keep/internal/config"
 	"github.com/audemed44/keep/internal/docker"
 	"github.com/audemed44/keep/internal/engine"
+	"github.com/audemed44/keep/internal/logging"
 	"github.com/audemed44/keep/internal/store"
 )
 
@@ -260,9 +262,11 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 		req.id <- id // 0 when it couldn't start
 	}
 	if err != nil {
-		slog.Error("starting a run", "err", err)
+		slog.ErrorContext(ctx, "starting a run", "err", err)
 		return 0
 	}
+	// Every line of the run carries its trace in Logbook.
+	ctx, logRun := logging.Job(ctx, "run."+string(job.Kind), "run", id, "trigger", job.Trigger)
 	r.mu.Lock()
 	r.running, r.kind = id, job.Kind
 	r.mu.Unlock()
@@ -289,6 +293,11 @@ func (r *Runner) runRequest(ctx context.Context, req request) int64 {
 		slog.Error("finishing a run", "err", err)
 	}
 	r.log(done, id, levelFor(status), "Finished in %s: %s", time.Since(started).Round(time.Second), summary)
+	var runErr error
+	if status == "failed" {
+		runErr = errors.New(summary)
+	}
+	logRun.End(runErr, "status", status)
 	if status == "failed" {
 		r.ping(done, hb, "/fail", summary)
 	} else {
@@ -367,33 +376,43 @@ func (r *Runner) ping(ctx context.Context, url, suffix, body string) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(url, "/")+suffix, strings.NewReader(body))
 	if err != nil {
-		slog.Warn("heartbeat", "err", err)
+		slog.WarnContext(ctx, "heartbeat failed", "err", noURL(err))
 		return
 	}
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	resp, err := r.client.Do(req)
 	if err != nil {
-		slog.Warn("heartbeat", "err", err)
+		slog.WarnContext(ctx, "heartbeat failed", "err", noURL(err))
 		return
 	}
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		slog.Warn("heartbeat", "status", resp.StatusCode)
+		slog.WarnContext(ctx, "heartbeat failed", "status", resp.StatusCode)
 	}
+}
+
+// noURL drops the address from an HTTP client error: heartbeat URLs carry
+// a token.
+func noURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 func (r *Runner) log(ctx context.Context, runID int64, level, format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
+	lvl := slog.LevelInfo
 	switch level {
 	case "error":
-		slog.Error(text, "run", runID)
+		lvl = slog.LevelError
 	case "warn":
-		slog.Warn(text, "run", runID)
-	default:
-		slog.Info(text, "run", runID)
+		lvl = slog.LevelWarn
 	}
+	slog.Log(ctx, lvl, text, "run", runID)
 	if err := r.Store.Log(context.WithoutCancel(ctx), runID, level, text); err != nil {
-		slog.Warn("saving a log line", "err", err)
+		slog.WarnContext(ctx, "saving a log line", "err", err)
 	}
 }
 

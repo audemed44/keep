@@ -57,7 +57,7 @@ var stateRank = map[string]int{
 func (s *Server) foyerWidget(w http.ResponseWriter, r *http.Request) {
 	o, err := s.Runner.Overview(r.Context())
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	now := time.Now()
@@ -213,7 +213,7 @@ func (s *Server) foyerRunStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.Store.GetRun(r.Context(), id)
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	state := "done"
@@ -270,7 +270,7 @@ func excludedPaths(host string, patterns []string) []string {
 func (s *Server) foyerBackups(w http.ResponseWriter, r *http.Request) {
 	o, err := s.Runner.Overview(r.Context())
 	if err != nil {
-		storeError(w, err)
+		storeError(w, r, err)
 		return
 	}
 	if o.ConfigError != "" {
